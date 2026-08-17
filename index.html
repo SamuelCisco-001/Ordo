@@ -971,13 +971,24 @@ function openDetail(id){
   if(e.recur_freq!=='none') h+='<div class="detail-line"><span class="k">Repeats</span><span>'
     + (e.recur_freq==='daily'?'Every day':'Weekly on '+e.recur_days.map(function(n){return DW[+n];}).join(', '))
     + (e.recur_until&&e.recur_until!=='never'?' until '+fmtDayLong(e.recur_until):'')+'</span></div>';
+  var isFeed=(e.origin||'').indexOf('feed:')===0;
+  var feedTitle='';
+  if(isFeed){
+    (S.data.feeds||[]).forEach(function(f){ if(f.slug===e.origin.slice(5)) feedTitle=f.title; });
+  }
   var srcbits=[];
   if(e.origin==='gcal') srcbits.push('Added in Google Calendar');
+  if(isFeed) srcbits.push('From the '+esc(feedTitle||'subscribed')+' feed');
   if(e.sync) srcbits.push('On the family calendar');
-  if(srcbits.length) h+='<div class="detail-line"><span class="k">Calendar</span><span style="color:var(--faint)">'+srcbits.join(' · ')+'</span></div>';
-  h+='<div class="sh-actions" style="margin-top:14px">'
-    + '<button class="btn btn-ghost danger" onclick="Ordo.delEng(\''+e.id+'\','+(e.series_id?'true':'false')+')">Remove</button>'
-    + '<button class="btn btn-ink" onclick="Ordo.editEng(\''+e.id+'\')">Edit</button></div>';
+  if(srcbits.length) h+='<div class="detail-line"><span class="k">Source</span><span style="color:var(--faint)">'+srcbits.join(' · ')+'</span></div>';
+  if(isFeed){
+    h+='<div style="color:var(--faint); font-size:13px; margin-top:12px">This entry keeps itself in step with the feed. Change it at the source and the book follows within the hour.</div>'
+      + '<div class="sh-actions" style="margin-top:14px"><button class="btn btn-ghost" onclick="Ordo.closeSheet()">Close</button></div>';
+  } else {
+    h+='<div class="sh-actions" style="margin-top:14px">'
+      + '<button class="btn btn-ghost danger" onclick="Ordo.delEng(\''+e.id+'\','+(e.series_id?'true':'false')+')">Remove</button>'
+      + '<button class="btn btn-ink" onclick="Ordo.editEng(\''+e.id+'\')">Edit</button></div>';
+  }
   openSheet(h);
 }
 function assignQuick(id, slug, el){
