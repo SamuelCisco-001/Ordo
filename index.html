@@ -309,7 +309,7 @@ nav.tabs button svg{width:22px; height:22px}
 'use strict';
 var Ordo = (function(){
 
-var BUILD = '6 · attendees + centered sheet';
+var BUILD = '8 · faster writes';
 
 // ------------------------------------------------------------ state
 var S = {
@@ -368,6 +368,7 @@ function apiGet(params){
 function apiPost(action, payload){
   var url = S.url + '?p=' + encodeURIComponent(S.pin)
     + '&action=' + encodeURIComponent(action)
+    + '&profile=' + encodeURIComponent(S.profile || 'shared')
     + '&d=' + encodeURIComponent(JSON.stringify(payload || {}));
   return fetch(url, { method:'GET', redirect:'follow' }).then(function(r){ return r.json(); });
 }
@@ -388,6 +389,18 @@ function refresh(force){
     });
 }
 function offline(on){ document.getElementById('offline').classList.toggle('on', !!on); }
+
+// A write hands back the refreshed book with it. Use that instead of asking
+// the server a second time.
+function applyBook(res){
+  if(!res || !res.book) return false;
+  S.data = res.book;
+  S.lastFetch = Date.now();
+  try { localStorage.setItem('ordo_cache', JSON.stringify(res.book)); } catch(e){}
+  offline(false);
+  render();
+  return true;
+}
 function toast(msg){
   var t = document.getElementById('toast');
   t.textContent = msg; t.classList.add('on');
@@ -880,20 +893,24 @@ function toggleObl(id){
       refresh(true); return;
     }
     if(res.respawned) toast('Done. The next one is on the board.');
-    refresh(true);
+    if(!applyBook(res)) refresh(true);
   }).catch(function(){ toast('Could not save. Are you offline?'); refresh(true); });
 }
+var quickBusy={};
 function quickAdd(tracker){
+  if(quickBusy[tracker]) return;
   var inp=document.getElementById('q-'+tracker);
   var v=inp.value.trim();
   if(!v) return;
+  quickBusy[tracker]=true;
   inp.value='';
   apiPost('create_obligation',{draft:{tracker:tracker,title:v}})
     .then(function(res){
+      quickBusy[tracker]=false;
       if(!res || res.ok===false){ toast('Could not save: ' + ((res && res.error) || 'no answer')); inp.value=v; return; }
-      refresh(true);
+      if(!applyBook(res)) refresh(true);
     })
-    .catch(function(){ toast('Could not save. Are you offline?'); inp.value=v; });
+    .catch(function(){ quickBusy[tracker]=false; toast('Could not save. Are you offline?'); inp.value=v; });
 }
 
 // ------------------------------------------------------------ sheet plumbing
@@ -903,6 +920,7 @@ function openSheet(html){
   document.getElementById('sheet').classList.add('on');
 }
 function closeSheet(){
+  saving=false;
   document.getElementById('scrim').classList.remove('on');
   document.getElementById('sheet').classList.remove('on');
 }
@@ -1050,7 +1068,26 @@ function readEngForm(){
   };
   return f;
 }
+// A write is in flight. Locks the sheet's action buttons so a second tap
+// can't start a second write, which is how one event became three.
+var saving=false;
+function lockSheet(on, label){
+  saving=on;
+  var btns=document.querySelectorAll('#sheet .sh-actions .btn');
+  for(var i=0;i<btns.length;i++){
+    btns[i].disabled=on;
+    btns[i].style.opacity=on?'.5':'';
+    btns[i].style.pointerEvents=on?'none':'';
+  }
+  var main=document.querySelector('#sheet .btn-ink');
+  if(main){
+    if(on){ main.dataset.label=main.textContent; main.textContent=label||'Saving…'; }
+    else if(main.dataset.label){ main.textContent=main.dataset.label; }
+  }
+}
+
 function saveEng(){
+  if(saving) return;
   var f = readEngForm();
   if(!f.date){ toast('Pick a date.'); return; }
   if(!f.attendees.length){ toast('Choose at least one person.'); return; }
@@ -1058,10 +1095,12 @@ function saveEng(){
   if(D.editing){
     if(D.series){
       confirmScope('Save for', function(scope){
-        apiPost('update_engagement',{id:D.id, scope:scope, fields:f}).then(done);
+        lockSheet(true);
+        apiPost('update_engagement',{id:D.id, scope:scope, fields:f}).then(done).catch(failed);
       });
     } else {
-      apiPost('update_engagement',{id:D.id, scope:'one', fields:f}).then(done);
+      lockSheet(true);
+      apiPost('update_engagement',{id:D.id, scope:'one', fields:f}).then(done).catch(failed);
     }
     return;
   }
@@ -1071,10 +1110,19 @@ function saveEng(){
   f.recur_days=D.recurDays;
   f.recur_until = freq==='none' ? '' :
     (document.getElementById('f-untilkind').value==='date' ? document.getElementById('f-untildate').value||'never' : 'never');
-  apiPost('create_engagement',{draft:f}).then(done);
+  lockSheet(true);
+  apiPost('create_engagement',{draft:f}).then(done).catch(failed);
+
   function done(res){
-    if(res && res.ok===false){ toast('Could not save: '+res.error); return; }
-    closeSheet(); toast('Written into the book.'); refresh(true);
+    saving=false;
+    if(res && res.ok===false){ lockSheet(false); toast('Could not save: '+res.error); return; }
+    closeSheet();
+    toast(res && res.duplicate ? 'Already written in.' : 'Written into the book.');
+    if(!applyBook(res)) refresh(true);
+  }
+  function failed(){
+    saving=false; lockSheet(false);
+    toast('Could not save. Are you offline?');
   }
 }
 function confirmScope(verb, cb){
@@ -1150,8 +1198,12 @@ function setAtt(id, field, slug, el){
     var fields={};
     fields[field]=e[field];
     apiPost('update_engagement',{id:id, scope:'one', fields:fields}).then(function(res){
-      if(!res || res.ok===false){ toast('Could not save: '+((res&&res.error)||'no answer')); }
-      refresh(true);
+      if(!res || res.ok===false){ toast('Could not save: '+((res&&res.error)||'no answer')); refresh(true); return; }
+      // Don't re-render under the open sheet; just keep the cache honest.
+      if(res.book){
+        S.data=res.book; S.lastFetch=Date.now();
+        try { localStorage.setItem('ordo_cache', JSON.stringify(res.book)); } catch(e){}
+      }
     }).catch(function(){ toast('Could not save. Are you offline?'); });
   }, 700);
 }
@@ -1162,10 +1214,10 @@ function editEng(id){
 function delEng(id, isSeries){
   if(isSeries){
     confirmScope('Remove', function(scope){
-      apiPost('delete_engagement',{id:id,scope:scope}).then(function(){ closeSheet(); toast('Removed.'); refresh(true); });
+      apiPost('delete_engagement',{id:id,scope:scope}).then(function(res){ closeSheet(); toast('Removed.'); if(!applyBook(res)) refresh(true); });
     });
   } else {
-    apiPost('delete_engagement',{id:id,scope:'one'}).then(function(){ closeSheet(); toast('Removed.'); refresh(true); });
+    apiPost('delete_engagement',{id:id,scope:'one'}).then(function(res){ closeSheet(); toast('Removed.'); if(!applyBook(res)) refresh(true); });
   }
 }
 
@@ -1218,6 +1270,7 @@ function oRecurUi(){
   document.getElementById('f-odays').style.display = v==='weekly'?'':'none';
 }
 function saveObl(){
+  if(saving) return;
   var f={
     tracker: document.getElementById('f-tracker').value,
     title: document.getElementById('f-title').value.trim(),
@@ -1232,11 +1285,17 @@ function saveObl(){
   };
   if(!f.title){ toast('Give it a title.'); return; }
   if(f.repeat_freq!=='none' && !f.deadline){ toast('A repeating item needs a first due date.'); return; }
+  lockSheet(true);
   var p = D.editing ? apiPost('update_obligation',{id:D.id,fields:f})
                     : apiPost('create_obligation',{draft:f});
   p.then(function(res){
-    if(res && res.ok===false){ toast('Could not save: '+res.error); return; }
-    closeSheet(); toast(D.editing?'Saved.':'On the board.'); refresh(true);
+    saving=false;
+    if(res && res.ok===false){ lockSheet(false); toast('Could not save: '+res.error); return; }
+    closeSheet(); toast(D.editing?'Saved.':'On the board.');
+    if(!applyBook(res)) refresh(true);
+  }).catch(function(){
+    saving=false; lockSheet(false);
+    toast('Could not save. Are you offline?');
   });
 }
 function openOblDetail(id){
@@ -1244,7 +1303,7 @@ function openOblDetail(id){
   if(o) oblForm(o);
 }
 function delObl(id){
-  apiPost('delete_obligation',{id:id}).then(function(){ closeSheet(); toast('Removed.'); refresh(true); });
+  apiPost('delete_obligation',{id:id}).then(function(res){ closeSheet(); toast('Removed.'); if(!applyBook(res)) refresh(true); });
 }
 
 // ------------------------------------------------------------ avatar menu
