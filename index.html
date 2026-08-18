@@ -138,6 +138,22 @@ nav.tabs button svg{width:22px; height:22px}
 .wcard .sub{font-size:12px; color:var(--faint)}
 .emptyday{color:var(--faint); font-family:var(--serif); font-style:italic; font-size:14px; padding:2px 0 6px}
 
+/* ---------- month ---------- */
+.mgrid{padding:0 8px 14px}
+.mhead{display:grid; grid-template-columns:repeat(7,1fr); padding:2px 0 6px}
+.mhead span{text-align:center; font-size:12px; color:var(--faint); letter-spacing:.14em}
+.mrow{display:grid; grid-template-columns:repeat(7,1fr); border-top:1px solid var(--line)}
+.mcell{min-height:92px; border-left:1px solid var(--line); padding:3px 3px 4px; display:flex; flex-direction:column; gap:2px; overflow:hidden}
+.mcell:first-child{border-left:none}
+.mcell.out{opacity:.38}
+.mcell.sel{background:var(--paper-2)}
+.mnum{font-size:14px; text-align:right; color:var(--faint); padding:0 2px}
+.mcell.today .mnum{color:var(--rubric); font-weight:600}
+.mev{font-size:10.5px; line-height:1.25; border-radius:4px; padding:1px 3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.mev.blk{background:transparent !important; font-style:italic}
+.mev b{font-weight:600; font-family:var(--serif)}
+.mmore{font-size:10px; color:var(--faint); padding-left:3px}
+
 /* ---------- boards ---------- */
 .boards{padding:12px 14px; column-gap:14px; column-count:1}
 @media(min-width:560px){.boards{column-count:2}}
@@ -285,6 +301,7 @@ var S = {
   anchor: todayStr(),
   weekPerson: '',
   weekStart: null,
+  monthPerson: '',
   showDone: {},
   lastFetch: 0
 };
@@ -325,11 +342,13 @@ function apiGet(params){
   var q = Object.keys(params).map(function(k){ return k+'='+encodeURIComponent(params[k]); }).join('&');
   return fetch(S.url + '?' + q, { method:'GET', redirect:'follow' }).then(function(r){ return r.json(); });
 }
+// Writes go out as GET. Apps Script answers /exec with a redirect, and a
+// redirected POST loses its body, so the payload rides in the query string.
 function apiPost(action, payload){
-  var body = Object.assign({ p:S.pin, action:action }, payload || {});
-  return fetch(S.url, { method:'POST', redirect:'follow',
-    headers:{'Content-Type':'text/plain;charset=utf-8'},
-    body: JSON.stringify(body) }).then(function(r){ return r.json(); });
+  var url = S.url + '?p=' + encodeURIComponent(S.pin)
+    + '&action=' + encodeURIComponent(action)
+    + '&d=' + encodeURIComponent(JSON.stringify(payload || {}));
+  return fetch(url, { method:'GET', redirect:'follow' }).then(function(r){ return r.json(); });
 }
 function refresh(force){
   if(!force && Date.now() - S.lastFetch < 15000) return Promise.resolve();
@@ -446,9 +465,20 @@ function enter(){
 // ------------------------------------------------------------ render root
 function render(){
   if(!S.data){ document.getElementById('main').innerHTML='<div class="centerload">Opening the book…</div>'; return; }
+  normalize();
   document.getElementById('tab-book').classList.toggle('on', S.tab==='book');
   document.getElementById('tab-boards').classList.toggle('on', S.tab==='boards');
   if(S.tab==='book') renderBook(); else renderBoards();
+}
+
+// An event pointing at a person who isn't in the People tab would otherwise
+// render into a column that doesn't exist. Drop the stale slugs instead.
+function normalize(){
+  var known={};
+  S.data.people.forEach(function(p){ known[p.slug]=true; });
+  function keep(list){ return (list||[]).filter(function(s){ return known[s]; }); }
+  S.data.engagements.forEach(function(e){ e.attendees=keep(e.attendees); e.managers=keep(e.managers); });
+  S.data.obligations.forEach(function(o){ o.assignees=keep(o.assignees); });
 }
 function go(tab){ S.tab=tab; render(); }
 
@@ -469,10 +499,13 @@ function attendsCol(e, slug){
 function renderBook(){
   var h = '<div class="bookhead">'
     + '<div class="seg"><button class="'+(S.view==='day'?'on':'')+'" onclick="Ordo.setView(\'day\')">Day</button>'
-    + '<button class="'+(S.view==='week'?'on':'')+'" onclick="Ordo.setView(\'week\')">Week</button></div>';
-  if(S.view==='day') h += dayHead(); else h += weekHead();
+    + '<button class="'+(S.view==='week'?'on':'')+'" onclick="Ordo.setView(\'week\')">Week</button>'
+    + '<button class="'+(S.view==='month'?'on':'')+'" onclick="Ordo.setView(\'month\')">Month</button></div>';
+  if(S.view==='day') h += dayHead();
+  else if(S.view==='week') h += weekHead();
+  else h += monthHead();
   h += '</div>';
-  h += S.view==='day' ? dayBody() : weekBody();
+  h += S.view==='day' ? dayBody() : (S.view==='week' ? weekBody() : monthBody());
   document.getElementById('main').innerHTML = h;
   if(S.view==='day') placeNowLine();
 }
@@ -669,6 +702,88 @@ function weekBody(){
 }
 function setWeekPerson(s){ S.weekPerson=s; render(); }
 
+// ------------------------------------------------------------ month
+var MONTH_FULL=['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+function monthHead(){
+  var d=dfrom(S.anchor);
+  var lbl='<span class="ordo-day" style="font-size:19px">'+MONTH_FULL[d.getMonth()]+'</span> <span class="ordo-num">'+d.getFullYear()+'</span>';
+  return '<div class="datebar">'
+    + '<button class="iconbtn" onclick="Ordo.shiftMonth(-1)">‹</button>'
+    + '<div class="title">'+lbl+'</div>'
+    + (S.anchor.slice(0,7)!==todayStr().slice(0,7) ? '<button class="today-btn" onclick="Ordo.thisMonth()">This month</button>' : '')
+    + '<button class="iconbtn" onclick="Ordo.shiftMonth(1)">›</button></div>'
+    + '<div class="chips"><button class="chip'+(S.monthPerson===''?' on':'')+'" style="'+(S.monthPerson===''?'background:var(--ink)':'')+'" onclick="Ordo.setMonthPerson(\'\')">Everyone</button>'
+    + S.data.people.map(function(p){
+        var on=p.slug===S.monthPerson;
+        return '<button class="chip'+(on?' on':'')+'" style="'+(on?'background:'+p.color:'')+'" onclick="Ordo.setMonthPerson(\''+p.slug+'\')">'+esc(p.name)+'</button>';
+      }).join('')
+    + '</div>';
+}
+function shiftMonth(n){
+  var d=dfrom(S.anchor);
+  var target=new Date(d.getFullYear(), d.getMonth()+n, 1, 12);
+  var last=new Date(target.getFullYear(), target.getMonth()+1, 0).getDate();
+  target.setDate(Math.min(d.getDate(), last));
+  S.anchor=dstr(target); render();
+}
+function thisMonth(){ S.anchor=todayStr(); render(); }
+function setMonthPerson(s){ S.monthPerson=s; render(); }
+
+function monthEvents(day){
+  return engsOn(day).filter(function(e){
+    if(!S.monthPerson) return true;
+    return attendsCol(e, S.monthPerson)!=='';
+  }).sort(function(a,b){
+    if(a.all_day!==b.all_day) return a.all_day?-1:1;
+    return mins(a.start)-mins(b.start);
+  });
+}
+
+function monthBody(){
+  var d=dfrom(S.anchor);
+  var first=dstr(new Date(d.getFullYear(), d.getMonth(), 1, 12));
+  var lastDay=new Date(d.getFullYear(), d.getMonth()+1, 0).getDate();
+  var gridStart=weekStartOf(first);
+  var t=todayStr();
+  var horizonEnd=addDays(t, 60), horizonStart=addDays(t,-7);
+
+  var h='<div class="mgrid"><div class="mhead">';
+  for(var i=0;i<7;i++) h+='<span class="ordo-day">'+DW[i].charAt(0)+'</span>';
+  h+='</div>';
+
+  var cur=gridStart, weeks=0;
+  while(weeks<6){
+    h+='<div class="mrow">';
+    for(var c=0;c<7;c++){
+      var day=addDays(cur, c);
+      var inMonth=day.slice(0,7)===first.slice(0,7);
+      var evs=monthEvents(day);
+      var loaded=day>=horizonStart && day<=horizonEnd;
+      h+='<div class="mcell'+(inMonth?'':' out')+(day===t?' today':'')+(day===S.anchor?' sel':'')+'" onclick="Ordo.openDay(\''+day+'\')">'
+        + '<span class="mnum ordo-num">'+dfrom(day).getDate()+'</span>';
+      evs.slice(0,3).forEach(function(e){
+        var col=e.attendees.length?pcolor(e.attendees[0]):'#8B8272';
+        h+='<span class="mev'+(e.type==='block'?' blk':'')+'" style="border-left:2.5px solid '+col+'; background:'+tint(col,.13)+'">'
+          + (e.all_day?'':'<b>'+fmtTime(e.start)+'</b> ')+esc(e.title)+'</span>';
+      });
+      if(evs.length>3) h+='<span class="mmore">+'+(evs.length-3)+' more</span>';
+      if(!loaded) h+='<span class="mmore" style="opacity:.5">·</span>';
+      h+='</div>';
+    }
+    h+='</div>';
+    cur=addDays(cur,7); weeks++;
+    if(cur.slice(0,7)!==first.slice(0,7) && dfrom(cur).getDate()>7 && weeks>=4) break;
+    if(weeks>=4 && addDays(cur,-1)>=dstr(new Date(d.getFullYear(), d.getMonth(), lastDay, 12))) break;
+  }
+  h+='</div>';
+  if(dstr(new Date(d.getFullYear(), d.getMonth(), 1, 12))>horizonEnd){
+    h+='<div class="emptyday" style="padding:14px">This month lies past the book\'s horizon. Days fill in as they come within sixty.</div>';
+  }
+  return h;
+}
+function openDay(day){ S.anchor=day; S.view='day'; render(); }
+
 // ------------------------------------------------------------ boards
 function renderBoards(){
   var t=todayStr();
@@ -739,7 +854,11 @@ function toggleObl(id){
   var o=S.data.obligations.find(function(x){ return x.id===id; });
   if(o){ o.status = o.status==='open'?'done':'open'; render(); }
   apiPost('toggle_obligation',{id:id}).then(function(res){
-    if(res.ok && res.respawned) toast('Done. The next one is on the board.');
+    if(!res || res.ok===false){
+      toast('Could not save: ' + ((res && res.error) || 'no answer'));
+      refresh(true); return;
+    }
+    if(res.respawned) toast('Done. The next one is on the board.');
     refresh(true);
   }).catch(function(){ toast('Could not save. Are you offline?'); refresh(true); });
 }
@@ -749,8 +868,11 @@ function quickAdd(tracker){
   if(!v) return;
   inp.value='';
   apiPost('create_obligation',{draft:{tracker:tracker,title:v}})
-    .then(function(){ refresh(true); })
-    .catch(function(){ toast('Could not save. Are you offline?'); });
+    .then(function(res){
+      if(!res || res.ok===false){ toast('Could not save: ' + ((res && res.error) || 'no answer')); inp.value=v; return; }
+      refresh(true);
+    })
+    .catch(function(){ toast('Could not save. Are you offline?'); inp.value=v; });
 }
 
 // ------------------------------------------------------------ sheet plumbing
@@ -1124,6 +1246,7 @@ boot();
 return {
   go:go, setView:setView, shiftDay:shiftDay, setAnchor:setAnchor, jumpToday:jumpToday,
   shiftWeek:shiftWeek, thisWeek:thisWeek, setWeekPerson:setWeekPerson,
+  shiftMonth:shiftMonth, thisMonth:thisMonth, setMonthPerson:setMonthPerson, openDay:openDay,
   openAdd:openAdd, openDetail:openDetail, openOblDetail:openOblDetail,
   closeSheet:closeSheet, pick:pick, resetGate:resetGate,
   chip:chip, knob:knob, dayToggle:dayToggle, typeSeg:typeSeg,
