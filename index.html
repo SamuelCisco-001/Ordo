@@ -120,6 +120,7 @@ nav.tabs button svg{width:22px; height:22px}
 .evt .tm{font-size:11px; opacity:.75; font-family:var(--serif)}
 .evt.blk{background:transparent !important; border-style:dashed !important}
 .evt.managed{opacity:.45}
+.pending{opacity:.6}
 .nowline{position:absolute; left:0; right:0; height:0; border-top:2px solid var(--rubric); z-index:4}
 .nowline::before{content:''; position:absolute; left:-4px; top:-4px; width:7px; height:7px; border-radius:50%; background:var(--rubric)}
 
@@ -243,6 +244,12 @@ nav.tabs button svg{width:22px; height:22px}
 .menu button:first-child{border-top:none}
 .menu .sub{display:block; font-size:12.5px; color:var(--faint); margin-top:1px}
 
+#lensband{display:none; align-items:center; justify-content:space-between; gap:10px;
+  padding:7px 14px; border-bottom:1px solid var(--line); position:sticky; top:49px; z-index:19}
+#lensband .ordo-day{font-size:14px}
+#lensband button{background:none; border:1px solid var(--line); border-radius:99px;
+  padding:3px 12px; font-size:12.5px; color:var(--ink)}
+
 #toast{position:fixed; left:50%; transform:translateX(-50%) translateY(20px); bottom:calc(88px + env(safe-area-inset-bottom));
   background:var(--ink); color:var(--paper); border-radius:99px; padding:9px 18px; font-size:13.5px; opacity:0;
   transition:.25s; z-index:60; pointer-events:none; white-space:nowrap}
@@ -287,6 +294,7 @@ nav.tabs button svg{width:22px; height:22px}
     </button>
     <button class="avatar" id="avatarbtn" aria-label="Reader menu"></button>
   </header>
+  <div id="lensband"></div>
   <main id="main"></main>
   <nav class="tabs">
     <button id="tab-book" onclick="Ordo.go('book')">
@@ -309,7 +317,7 @@ nav.tabs button svg{width:22px; height:22px}
 'use strict';
 var Ordo = (function(){
 
-var BUILD = '8 · faster writes';
+var BUILD = '11 · assigning is optional';
 
 // ------------------------------------------------------------ state
 var S = {
@@ -323,6 +331,8 @@ var S = {
   weekPerson: '',
   weekStart: null,
   monthPerson: '',
+  lens: localStorage.getItem('ordo_lens') || '',
+  boardPerson: '',
   showDone: {},
   lastFetch: 0
 };
@@ -481,8 +491,21 @@ function picker(){
 function pick(slug){
   S.profile = slug;
   localStorage.setItem('ordo_profile', slug);
+  // A person signing in starts in their own book; the shared tablet doesn't.
+  if(slug!=='shared' && !S.lens){ S.lens=slug; localStorage.setItem('ordo_lens', slug); S.weekPerson=slug; S.monthPerson=slug; S.boardPerson=slug; }
+  if(slug==='shared'){ S.lens=''; localStorage.removeItem('ordo_lens'); }
   enter();
   refresh(true);
+}
+
+// The lens narrows the whole book to one person. A boy can put his own name
+// on and see only his day and his chores.
+function setLens(slug){
+  S.lens = slug || '';
+  if(S.lens){ localStorage.setItem('ordo_lens', S.lens); S.weekPerson=S.lens; S.monthPerson=S.lens; S.boardPerson=S.lens; }
+  else { localStorage.removeItem('ordo_lens'); S.monthPerson=''; S.boardPerson=''; }
+  closeSheet();
+  render();
 }
 
 function enter(){
@@ -500,6 +523,14 @@ function enter(){
 function render(){
   if(!S.data){ document.getElementById('main').innerHTML='<div class="centerload">Opening the book…</div>'; return; }
   normalize();
+  if(S.lens && !person(S.lens)) S.lens='';
+  var band=document.getElementById('lensband');
+  if(S.lens){
+    band.style.display='flex';
+    band.style.background=tint(pcolor(S.lens),.16);
+    band.innerHTML='<span class="ordo-day" style="color:'+pcolor(S.lens)+'">'+esc(pname(S.lens))+'\u2019s book</span>'
+      + '<button onclick="Ordo.setLens(\'\')">Show everyone</button>';
+  } else { band.style.display='none'; }
   document.getElementById('tab-book').classList.toggle('on', S.tab==='book');
   document.getElementById('tab-boards').classList.toggle('on', S.tab==='boards');
   if(S.tab==='book') renderBook(); else renderBoards();
@@ -518,6 +549,12 @@ function go(tab){ S.tab=tab; render(); }
 
 // ------------------------------------------------------------ engagements per day
 function engsOn(day){
+  return rawEngsOn(day).filter(function(e){
+    if(!S.lens) return true;
+    return attendsCol(e, S.lens)!=='' || e.attendees.length===0;
+  });
+}
+function rawEngsOn(day){
   return S.data.engagements.filter(function(e){
     if(e.all_day && e.end_date) return e.date<=day && day<=e.end_date;
     return e.date===day;
@@ -571,8 +608,9 @@ function dayBody(){
   var evs = engsOn(S.anchor);
   var allday = evs.filter(function(e){ return e.all_day; });
   var timed = evs.filter(function(e){ return !e.all_day; });
-  var cols = S.data.people.map(function(p){ return {slug:p.slug, name:p.name, color:p.color}; });
-  var hasUnassigned = timed.some(function(e){ return e.attendees.length===0; });
+  var cols = S.data.people.filter(function(p){ return !S.lens || p.slug===S.lens; })
+    .map(function(p){ return {slug:p.slug, name:p.name, color:p.color}; });
+  var hasUnassigned = evs.some(function(e){ return e.attendees.length===0; });
   if(hasUnassigned) cols.unshift({slug:'_family', name:'Family', color:'#8B8272'});
 
   var h='';
@@ -581,6 +619,7 @@ function dayBody(){
     allday.forEach(function(e){
       var c = e.attendees.length ? pcolor(e.attendees[0]) : '#8B8272';
       h += '<div class="adcard" style="background:'+tint(c,.14)+'; border-left:3px solid '+c+'" onclick="Ordo.openDetail(\''+e.id+'\')">'
+        + (e.attendees.length ? '' : '<span style="color:var(--faint); font-weight:400">Family · </span>')
         + esc(e.title)
         + (e.end_date ? '<span style="opacity:.6;font-weight:400">through '+fmtDeadline(e.end_date)+'</span>' : '')
         + badgeRow(e) + '</div>';
@@ -620,7 +659,7 @@ function dayBody(){
       var role = c.slug==='_family' ? 'att' : attendsCol(e,c.slug);
       var mgrB = (e.managers.length && e.managers[0]!==c.slug)
         ? 'border:2.5px solid '+pcolor(e.managers[0])+';' : '';
-      var cls = 'evt' + (e.type==='block'?' blk':'') + (role==='mgr'?' managed':'');
+      var cls = 'evt' + (e.type==='block'?' blk':'') + (role==='mgr'?' managed':'') + (e._pending?' pending':'');
       var style = 'top:'+top+'px; height:'+hgt+'px; left:calc('+left+'% + 2px); width:calc('+width+'% - 4px);'
         + 'background:'+tint(col, e.type==='rhythm'?.1:.16)+'; border-left:3px solid '+col+';'
         + (e.type==='block' ? 'border:1.5px dashed '+col+';' : mgrB);
@@ -698,12 +737,15 @@ function shiftWeek(n){ S.weekStart=addDays(S.weekStart,7*n); render(); }
 function thisWeek(){ S.weekStart=weekStartOf(todayStr()); render(); }
 
 function weekBody(){
-  var h='<div class="chips">';
-  S.data.people.forEach(function(p){
-    var on=p.slug===S.weekPerson;
-    h+='<button class="chip'+(on?' on':'')+'" style="'+(on?'background:'+p.color:'')+'" onclick="Ordo.setWeekPerson(\''+p.slug+'\')">'+esc(p.name)+'</button>';
-  });
-  h+='</div>';
+  var h='';
+  if(!S.lens){
+    h+='<div class="chips">';
+    S.data.people.forEach(function(p){
+      var on=p.slug===S.weekPerson;
+      h+='<button class="chip'+(on?' on':'')+'" style="'+(on?'background:'+p.color:'')+'" onclick="Ordo.setWeekPerson(\''+p.slug+'\')">'+esc(p.name)+'</button>';
+    });
+    h+='</div>';
+  }
   var t=todayStr();
   for(var i=0;i<7;i++){
     var d=addDays(S.weekStart,i);
@@ -747,12 +789,13 @@ function monthHead(){
     + '<div class="title">'+lbl+'</div>'
     + (S.anchor.slice(0,7)!==todayStr().slice(0,7) ? '<button class="today-btn" onclick="Ordo.thisMonth()">This month</button>' : '')
     + '<button class="iconbtn" onclick="Ordo.shiftMonth(1)">›</button></div>'
-    + '<div class="chips"><button class="chip'+(S.monthPerson===''?' on':'')+'" style="'+(S.monthPerson===''?'background:var(--ink)':'')+'" onclick="Ordo.setMonthPerson(\'\')">Everyone</button>'
-    + S.data.people.map(function(p){
-        var on=p.slug===S.monthPerson;
-        return '<button class="chip'+(on?' on':'')+'" style="'+(on?'background:'+p.color:'')+'" onclick="Ordo.setMonthPerson(\''+p.slug+'\')">'+esc(p.name)+'</button>';
-      }).join('')
-    + '</div>';
+    + (S.lens ? '' :
+       '<div class="chips"><button class="chip'+(S.monthPerson===''?' on':'')+'" style="'+(S.monthPerson===''?'background:var(--ink)':'')+'" onclick="Ordo.setMonthPerson(\'\')">Everyone</button>'
+       + S.data.people.map(function(p){
+           var on=p.slug===S.monthPerson;
+           return '<button class="chip'+(on?' on':'')+'" style="'+(on?'background:'+p.color:'')+'" onclick="Ordo.setMonthPerson(\''+p.slug+'\')">'+esc(p.name)+'</button>';
+         }).join('')
+       + '</div>');
 }
 function shiftMonth(n){
   var d=dfrom(S.anchor);
@@ -821,9 +864,25 @@ function openDay(day){ S.anchor=day; S.view='day'; render(); }
 // ------------------------------------------------------------ boards
 function renderBoards(){
   var t=todayStr();
-  var h='<div class="boards">';
+  var who = S.lens || S.boardPerson;
+  var h='';
+  if(!S.lens){
+    h+='<div class="chips" style="padding:12px 14px 2px">'
+      + '<button class="chip'+(S.boardPerson===''?' on':'')+'" style="'+(S.boardPerson===''?'background:var(--ink)':'')+'" onclick="Ordo.setBoardPerson(\'\')">Everyone</button>';
+    S.data.people.forEach(function(p){
+      var on=p.slug===S.boardPerson;
+      h+='<button class="chip'+(on?' on':'')+'" style="'+(on?'background:'+p.color:'')+'" onclick="Ordo.setBoardPerson(\''+p.slug+'\')">'+esc(p.name)+'</button>';
+    });
+    h+='</div>';
+  }
+  h+='<div class="boards">';
   S.data.trackers.forEach(function(tr){
-    var items=S.data.obligations.filter(function(o){ return o.tracker===tr.slug; });
+    var items=S.data.obligations.filter(function(o){
+      if(o.tracker!==tr.slug) return false;
+      if(!who) return true;
+      // Unassigned items are the household's, so they stay visible to all.
+      return o.assignees.indexOf(who)!==-1 || o.assignees.length===0;
+    });
     var open=items.filter(function(o){ return o.status==='open' && (!o.start_date || o.start_date<=t); });
     var later=items.filter(function(o){ return o.status==='open' && o.start_date && o.start_date>t; });
     var done=items.filter(function(o){ return o.status==='done'; })
@@ -844,7 +903,7 @@ function renderBoards(){
         + '<button onclick="Ordo.quickAdd(\''+tr.slug+'\')">+</button></div>';
     }
     open.forEach(function(o){ h+=itemRow(o,t); });
-    if(!open.length) h+='<div class="emptyday">nothing waiting</div>';
+    if(!open.length) h+='<div class="emptyday">'+(who?'nothing for '+esc(pname(who)):'nothing waiting')+'</div>';
     if(later.length){
       h+='<button class="tgl" onclick="Ordo.toggleGroup(\'later-'+tr.slug+'\')">Later · '+later.length+'</button>'
         + '<div id="later-'+tr.slug+'" style="display:none">';
@@ -864,6 +923,11 @@ function renderBoards(){
   h+='</div>';
   document.getElementById('main').innerHTML=h;
 }
+function trackerType(slug){
+  var t=(S.data.trackers||[]).find(function(x){ return x.slug===slug; });
+  return t?t.type:'todo';
+}
+function setBoardPerson(s){ S.boardPerson=s; render(); }
 function toggleGroup(id){
   var el=document.getElementById(id);
   el.style.display = el.style.display==='none' ? '' : 'none';
@@ -875,9 +939,10 @@ function itemRow(o,t,dim){
     due='<span class="pill'+(isDue?' due':'')+'">'+fmtDeadline(o.deadline)
       + (o.deadline_time?' '+fmtTime(o.deadline_time):'')+'</span>';
   }
-  var reps = o.repeat_freq!=='none' ? '<span class="pill">↻</span>' : '';
+  var reps = o.repeat_freq!=='none'
+    ? '<span class="pill">'+(o.repeat_freq==='rhythm_daily'?'daily':(o.repeat_freq==='rhythm_weekly'?'weekly':'↻'))+'</span>' : '';
   var ass=''; o.assignees.slice(0,3).forEach(function(s){ ass+='<span class="mini" style="background:'+pcolor(s)+'">'+initial(s)+'</span>'; });
-  return '<div class="item'+(o.status==='done'?' done':'')+'"'+(dim?' style="opacity:.65"':'')+'>'
+  return '<div class="item'+(o.status==='done'?' done':'')+(o._pending?' pending':'')+'"'+(dim?' style="opacity:.65"':'')+'>'
     + '<button class="ck" onclick="Ordo.toggleObl(\''+o.id+'\')" aria-label="Toggle">✓</button>'
     + '<div class="body" onclick="Ordo.openOblDetail(\''+o.id+'\')"><div class="t">'
     + (o.urgent&&o.status==='open'?'<span class="bang">! </span>':'')+esc(o.title)+'</div>'
@@ -904,6 +969,12 @@ function quickAdd(tracker){
   if(!v) return;
   quickBusy[tracker]=true;
   inp.value='';
+  var temp={ id:'tmp-'+Date.now(), tracker:tracker, title:v, assignees:[], deadline:'',
+    deadline_time:'', start_date:'', urgent:false, status:'open', completed_at:'',
+    repeat_freq:'none', repeat_every:'', repeat_days:[], notes:'',
+    sort_order:Date.now(), _pending:true };
+  S.data.obligations.push(temp);
+  render();
   apiPost('create_obligation',{draft:{tracker:tracker,title:v}})
     .then(function(res){
       quickBusy[tracker]=false;
@@ -986,7 +1057,7 @@ function recurUi(){
   document.getElementById('f-recurdays').style.display = f==='weekly'?'':'none';
   document.getElementById('f-recuruntil').style.display = f==='none'?'none':'';
   var sy=document.getElementById('f-syncwrap');
-  if(sy && !D.editing){
+  if(sy && !D.editing){  // leave an existing item's sync setting alone
     // default: sync only a one-off appointment
     var want = (f==='none' && D.type==='appointment');
     if(D.sync!==want){ D.sync=want; var k=document.getElementById('f-syncknob'); if(k) k.classList.toggle('on',want); }
@@ -1027,7 +1098,7 @@ function engForm(existing){
   var end = e&&e.end?e.end:'10:00';
   var h='<h2 class="sh-title">'+(e?'Edit engagement':'New engagement')+'</h2><div class="frm">';
   if(!e || !e.series_id){
-    h+='<div class="seg" id="f-typeseg">'
+    h+='<span class="lbl">Kind</span><div class="seg" id="f-typeseg">'
       + '<button data-t="appointment" class="'+(D.type==='appointment'?'on':'')+'" onclick="Ordo.typeSeg(\'appointment\')">Appointment</button>'
       + '<button data-t="rhythm" class="'+(D.type==='rhythm'?'on':'')+'" onclick="Ordo.typeSeg(\'rhythm\')">Rhythm</button>'
       + '<button data-t="block" class="'+(D.type==='block'?'on':'')+'" onclick="Ordo.typeSeg(\'block\')">Block</button></div>';
@@ -1043,7 +1114,7 @@ function engForm(existing){
     + '<div><span class="lbl">Managed by <span style="text-transform:none;letter-spacing:0">(runs it, may not attend)</span></span>'+chipsetHtml('managers',D.managers)+'</div>'
     + '<div><span class="lbl">Where</span><input class="field" id="f-loc" value="'+esc(e?e.location:'')+'" placeholder="Optional"></div>'
     + '<div><span class="lbl">Notes</span><input class="field" id="f-notes" value="'+esc(e?e.notes:'')+'" placeholder="Optional"></div>';
-  if(!e) h+=repeatBlock('none', D.recurDays, 'never');
+  if(!e || !e.series_id) h+=repeatBlock('none', D.recurDays, 'never');
   if(S.data.config.calendar_on){
     h+='<div class="switch" id="f-syncwrap"><span>Add to Google Calendar<span style="display:block;font-size:12px;color:var(--faint)">Reminders come from your phone\'s calendar</span></span>'
       + '<button type="button" id="f-syncknob" class="knob'+(D.sync?' on':'')+'" onclick="Ordo.knob(\'sync\',this)"></button></div>';
@@ -1056,6 +1127,7 @@ function engForm(existing){
 
 function readEngForm(){
   var f = {
+    type: D.type,
     title: document.getElementById('f-title').value.trim() || 'Untitled',
     date: document.getElementById('f-date').value,
     all_day: D.allday,
@@ -1092,38 +1164,100 @@ function saveEng(){
   if(!f.date){ toast('Pick a date.'); return; }
   if(!f.attendees.length){ toast('Choose at least one person.'); return; }
   if(!f.all_day && mins(f.end)<=mins(f.start)){ toast('End must come after start.'); return; }
-  if(D.editing){
-    if(D.series){
-      confirmScope('Save for', function(scope){
-        lockSheet(true);
-        apiPost('update_engagement',{id:D.id, scope:scope, fields:f}).then(done).catch(failed);
-      });
-    } else {
-      lockSheet(true);
-      apiPost('update_engagement',{id:D.id, scope:'one', fields:f}).then(done).catch(failed);
-    }
+
+  var recSel=document.getElementById('f-recur');
+  if(D.editing && recSel && recSel.value!=='none'){
+    // Becoming a series. The server rebuilds it, so wait for the answer
+    // rather than guessing at sixty instances.
+    f.recur_freq=recSel.value;
+    f.recur_days=D.recurDays;
+    f.recur_until = document.getElementById('f-untilkind').value==='date'
+      ? (document.getElementById('f-untildate').value||'never') : 'never';
+    lockSheet(true, 'Making it repeat…');
+    apiPost('update_engagement',{id:D.id, scope:'one', fields:f}).then(function(res){
+      saving=false;
+      if(!res || res.ok===false){ lockSheet(false); toast('Could not save: '+((res&&res.error)||'no answer')); return; }
+      closeSheet(); toast('Now a rhythm in the book.');
+      if(!applyBook(res)) refresh(true);
+    }).catch(function(){ saving=false; lockSheet(false); toast('Could not save. Are you offline?'); });
     return;
   }
+
+  if(D.editing){
+    var target=S.data.engagements.find(function(x){ return x.id===D.id; });
+    var backup=target?JSON.parse(JSON.stringify(target)):null;
+    var go=function(scope){
+      // Show the change now; the server catches up behind us.
+      if(target){
+        target.title=f.title; target.date=f.date; target.all_day=f.all_day;
+        target.start=f.start; target.end=f.end;
+        target.attendees=f.attendees.slice(); target.managers=f.managers.slice();
+        target.location=f.location; target.notes=f.notes; target.sync=f.sync;
+        target.type=f.type;
+      }
+      closeSheet(); toast('Saved.'); render();
+      apiPost('update_engagement',{id:D.id, scope:scope, fields:f})
+        .then(function(res){ settle(res, backup, target); })
+        .catch(function(){ revert(backup, target); });
+    };
+    if(D.series) confirmScope('Save for', go); else go('one');
+    return;
+  }
+
   var freq=document.getElementById('f-recur').value;
   f.type=D.type;
   f.recur_freq=freq;
   f.recur_days=D.recurDays;
   f.recur_until = freq==='none' ? '' :
     (document.getElementById('f-untilkind').value==='date' ? document.getElementById('f-untildate').value||'never' : 'never');
-  lockSheet(true);
-  apiPost('create_engagement',{draft:f}).then(done).catch(failed);
 
-  function done(res){
+  // Draw it into the book immediately. A single date can be placed exactly;
+  // a series needs the server to expand it, so that one waits for the answer.
+  var temp=null;
+  if(freq==='none'){
+    temp={ id:'tmp-'+Date.now(), type:f.type, title:f.title, date:f.date, end_date:'',
+      start:f.start, end:f.end, all_day:f.all_day,
+      attendees:f.attendees.slice(), managers:f.managers.slice(),
+      location:f.location, notes:f.notes, recur_freq:'none', recur_days:[],
+      recur_until:'', series_id:'', sync:f.sync, origin:'ordo', _pending:true };
+    S.data.engagements.push(temp);
+    closeSheet(); toast('Written into the book.'); render();
+  } else {
+    lockSheet(true, 'Writing the series…');
+  }
+
+  apiPost('create_engagement',{draft:f}).then(function(res){
     saving=false;
-    if(res && res.ok===false){ lockSheet(false); toast('Could not save: '+res.error); return; }
-    closeSheet();
-    toast(res && res.duplicate ? 'Already written in.' : 'Written into the book.');
-    if(!applyBook(res)) refresh(true);
-  }
-  function failed(){
-    saving=false; lockSheet(false);
+    if(!res || res.ok===false){
+      if(temp) dropTemp(temp);
+      lockSheet(false);
+      toast('Could not save: '+((res&&res.error)||'no answer'));
+      render(); return;
+    }
+    if(!temp){ closeSheet(); toast('Written into the book.'); }
+    if(!applyBook(res)){ if(temp) dropTemp(temp); refresh(true); }
+  }).catch(function(){
+    saving=false;
+    if(temp) dropTemp(temp);
+    lockSheet(false);
     toast('Could not save. Are you offline?');
+    render();
+  });
+
+  function settle(res, backup, target){
+    if(!res || res.ok===false){ revert(backup, target); return; }
+    applyBook(res);
   }
+  function revert(backup, target){
+    if(backup && target) Object.keys(backup).forEach(function(k){ target[k]=backup[k]; });
+    toast('Could not save. Put it back the way it was.');
+    render();
+  }
+}
+
+function dropTemp(temp){
+  var i=S.data.engagements.indexOf(temp);
+  if(i!==-1) S.data.engagements.splice(i,1);
 }
 function confirmScope(verb, cb){
   openSheet('<h2 class="sh-title">'+verb+'…</h2><div class="menu">'
@@ -1226,29 +1360,38 @@ function oblForm(existing, trackerPreset){
   var o=existing;
   D={
     editing:!!o, id:o?o.id:null,
-    assignees:o?o.assignees.slice():(S.profile!=='shared'?[S.profile]:[]),
+    assignees:o?o.assignees.slice():(function(){
+      // Groceries belong to the household. Nobody owns the milk.
+      if(trackerType(trackerPreset||'todo')==='grocery') return [];
+      var who=S.lens||S.boardPerson;
+      if(who) return [who];
+      return S.profile!=='shared'?[S.profile]:[];
+    })(),
     urgent:o?o.urgent:false,
     repeatDays:o?o.repeat_days.map(Number):[]
   };
   var h='<h2 class="sh-title">'+(o?'Edit':'New board item')+'</h2><div class="frm">'
-    + '<div><span class="lbl">Board</span><select class="field" id="f-tracker">';
+    + '<div><span class="lbl">Board</span><select class="field" id="f-tracker" onchange="Ordo.oTrackerUi()">';
   S.data.trackers.forEach(function(tr){
     var sel=(o?o.tracker:trackerPreset||'todo')===tr.slug;
     h+='<option value="'+tr.slug+'"'+(sel?' selected':'')+'>'+esc(tr.title)+'</option>';
   });
   h+='</select></div>'
     + '<div><span class="lbl">Title</span><input class="field" id="f-title" value="'+esc(o?o.title:'')+'" placeholder="What needs doing"></div>'
-    + '<div><span class="lbl">Whose</span>'+chipsetHtml('assignees',D.assignees)+'</div>'
-    + '<div class="row2"><div><span class="lbl">Due</span><input class="field" type="date" id="f-deadline" value="'+(o?o.deadline:'')+'"></div>'
+    + '<div id="f-whose"><span class="lbl" id="f-whoselbl">Whose</span>'+chipsetHtml('assignees',D.assignees)+'</div>'
+    + '<div class="row2" id="f-deadlinewrap"><div><span class="lbl">Due</span><input class="field" type="date" id="f-deadline" value="'+(o?o.deadline:'')+'"></div>'
     + '<div><span class="lbl">At</span>'+timeSelect('f-dtime', o&&o.deadline_time?o.deadline_time:'')+'</div></div>'
     + '<div class="switch"><span>Urgent</span><button type="button" class="knob'+(D.urgent?' on':'')+'" onclick="Ordo.knob(\'urgent\',this)"></button></div>'
     + '<div><span class="lbl">Repeats</span><select class="field" id="f-orecur" onchange="Ordo.oRecurUi()">'
     + '<option value="none"'+(!o||o.repeat_freq==='none'?' selected':'')+'>Does not repeat</option>'
-    + '<option value="days"'+(o&&o.repeat_freq==='days'?' selected':'')+'>Every N days after it\'s done</option>'
-    + '<option value="weekly"'+(o&&o.repeat_freq==='weekly'?' selected':'')+'>Weekly</option></select></div>'
+    + '<option value="rhythm_daily"'+(o&&o.repeat_freq==='rhythm_daily'?' selected':'')+'>Every day</option>'
+    + '<option value="rhythm_weekly"'+(o&&o.repeat_freq==='rhythm_weekly'?' selected':'')+'>Certain days each week</option>'
+    + '<option value="days"'+(o&&o.repeat_freq==='days'?' selected':'')+'>N days after it\'s done</option>'
+    + '<option value="weekly"'+(o&&o.repeat_freq==='weekly'?' selected':'')+'>Weekly once it\'s done</option></select>'
+    + '<div id="f-orecurnote" style="color:var(--faint); font-size:12.5px; margin-top:5px"></div></div>'
     + '<div id="f-oevery" style="display:'+(o&&o.repeat_freq==='days'?'':'none')+'"><span class="lbl">Every how many days</span>'
     + '<input class="field" type="number" min="1" id="f-every" value="'+(o&&o.repeat_every?o.repeat_every:'7')+'"></div>'
-    + '<div id="f-odays" style="display:'+(o&&o.repeat_freq==='weekly'?'':'none')+'"><span class="lbl">On</span><div class="daytgl">';
+    + '<div id="f-odays" style="display:'+(o&&(o.repeat_freq==='weekly'||o.repeat_freq==='rhythm_weekly')?'':'none')+'"><span class="lbl">On</span><div class="daytgl">';
   for(var i=0;i<7;i++){
     h+='<button type="button" class="'+(D.repeatDays.indexOf(i)!==-1?'on':'')+'" onclick="Ordo.dayToggle(\'repeatDays\','+i+',this)">'+DW[i].charAt(0)+'</button>';
   }
@@ -1263,11 +1406,38 @@ function oblForm(existing, trackerPreset){
   var none=document.createElement('option'); none.value=''; none.textContent='No time';
   ts.insertBefore(none, ts.firstChild);
   if(!(o&&o.deadline_time)) ts.value='';
+  oRecurUi();
+  oTrackerUi();
 }
+var RHYTHM_NOTE={
+  rhythm_daily:'A fresh one appears every morning. A day missed slips away rather than piling up.',
+  rhythm_weekly:'One appears on each day you pick, done or not.',
+  days:'The next one is scheduled from the day this gets done.',
+  weekly:'The next one appears the following week, counted from when this gets done.',
+  none:''
+};
+function isRhythm(v){ return v==='rhythm_daily'||v==='rhythm_weekly'; }
+function oTrackerUi(){
+  var sel=document.getElementById('f-tracker');
+  if(!sel) return;
+  var isGrocery = trackerType(sel.value)==='grocery';
+  // Assigning is always available, never assumed. Groceries just don't
+  // start with anyone's name on them.
+  var lbl=document.getElementById('f-whoselbl');
+  if(lbl) lbl.innerHTML = 'Whose <span style="text-transform:none; letter-spacing:0">'
+    + (isGrocery ? '(optional, for whoever is picking it up)' : '(optional)') + '</span>';
+  var titleField=document.getElementById('f-title');
+  if(titleField && !titleField.value) titleField.placeholder = isGrocery?'What to pick up':'What needs doing';
+}
+
 function oRecurUi(){
   var v=document.getElementById('f-orecur').value;
   document.getElementById('f-oevery').style.display = v==='days'?'':'none';
-  document.getElementById('f-odays').style.display = v==='weekly'?'':'none';
+  document.getElementById('f-odays').style.display = (v==='weekly'||v==='rhythm_weekly')?'':'none';
+  document.getElementById('f-orecurnote').textContent = RHYTHM_NOTE[v]||'';
+  // A rhythm sets its own dates, so the manual due date steps aside.
+  var dl=document.getElementById('f-deadlinewrap');
+  if(dl) dl.style.display = isRhythm(v)?'none':'';
 }
 function saveObl(){
   if(saving) return;
@@ -1284,18 +1454,47 @@ function saveObl(){
     notes: document.getElementById('f-notes').value.trim()
   };
   if(!f.title){ toast('Give it a title.'); return; }
-  if(f.repeat_freq!=='none' && !f.deadline){ toast('A repeating item needs a first due date.'); return; }
-  lockSheet(true);
+  if(f.repeat_freq!=='none' && !isRhythm(f.repeat_freq) && !f.deadline){
+    toast('A repeating item needs a first due date.'); return;
+  }
+  if(f.repeat_freq==='rhythm_weekly' && !f.repeat_days.length){
+    toast('Pick which days of the week.'); return;
+  }
+  var temp=null;
+  if(D.editing){
+    var o=S.data.obligations.find(function(x){ return x.id===D.id; });
+    if(o){
+      o.title=f.title; o.tracker=f.tracker; o.assignees=f.assignees.slice();
+      o.deadline=f.deadline; o.deadline_time=f.deadline_time; o.urgent=f.urgent;
+      o.repeat_freq=f.repeat_freq; o.repeat_days=f.repeat_days.slice(); o.notes=f.notes;
+    }
+  } else if(isRhythm(f.repeat_freq)){
+    temp=null;
+  } else {
+    temp={ id:'tmp-'+Date.now(), tracker:f.tracker, title:f.title,
+      assignees:f.assignees.slice(), deadline:f.deadline, deadline_time:f.deadline_time,
+      start_date:'', urgent:f.urgent, status:'open', completed_at:'',
+      repeat_freq:f.repeat_freq, repeat_every:f.repeat_every,
+      repeat_days:f.repeat_days.slice(), notes:f.notes, sort_order:Date.now(), _pending:true };
+    S.data.obligations.push(temp);
+  }
+  closeSheet(); toast(D.editing?'Saved.':'On the board.'); render();
+
   var p = D.editing ? apiPost('update_obligation',{id:D.id,fields:f})
                     : apiPost('create_obligation',{draft:f});
   p.then(function(res){
     saving=false;
-    if(res && res.ok===false){ lockSheet(false); toast('Could not save: '+res.error); return; }
-    closeSheet(); toast(D.editing?'Saved.':'On the board.');
+    if(!res || res.ok===false){
+      if(temp){ var i=S.data.obligations.indexOf(temp); if(i!==-1) S.data.obligations.splice(i,1); }
+      toast('Could not save: '+((res&&res.error)||'no answer'));
+      render(); return;
+    }
     if(!applyBook(res)) refresh(true);
   }).catch(function(){
-    saving=false; lockSheet(false);
+    saving=false;
+    if(temp){ var j=S.data.obligations.indexOf(temp); if(j!==-1) S.data.obligations.splice(j,1); }
     toast('Could not save. Are you offline?');
+    render();
   });
 }
 function openOblDetail(id){
@@ -1312,12 +1511,26 @@ document.getElementById('avatarbtn').addEventListener('click', function(){
     + '<div class="tagline" style="margin:-8px 0 10px">The Family Book of Days</div>'
     + '<div class="menu">'
     + '<button onclick="Ordo.switchReader()">Switch reader<span class="sub">Now reading as '+(S.profile==='shared'?'the shared device':esc(pname(S.profile)))+'</span></button>'
+    + '<button onclick="Ordo.openLensPicker()">Whose book<span class="sub">'+(S.lens?'Showing only '+esc(pname(S.lens)):'Showing everyone')+'</span></button>'
     + '<button onclick="Ordo.syncNow()">Sync with Google Calendar<span class="sub">Also runs on its own every 15 minutes</span></button>'
     + '<button onclick="Ordo.resetGate()">Change address or PIN</button>'
     + '</div>'
     + '<div style="text-align:center; color:var(--faint); font-size:11.5px; letter-spacing:.08em; padding:14px 0 2px">BUILD ' + BUILD + '</div>';
   openSheet(h);
 });
+function openLensPicker(){
+  var h='<h2 class="sh-title">Whose book</h2>'
+    + '<div style="color:var(--faint); font-size:13.5px; margin:-6px 0 12px">Narrow the whole book to one person: their day, their week, their chores.</div>'
+    + '<div class="chipset">'
+    + '<button type="button" class="pchip'+(S.lens===''?' on':'')+'" style="'+(S.lens===''?'background:var(--ink); color:#FBF6EC; border-color:transparent':'')+'" onclick="Ordo.setLens(\'\')">Everyone</button>';
+  S.data.people.forEach(function(p){
+    var on=p.slug===S.lens;
+    h+='<button type="button" class="pchip'+(on?' on':'')+'" style="'+(on?'background:'+p.color+'; color:#FBF6EC; border-color:transparent':'')+'" onclick="Ordo.setLens(\''+p.slug+'\')">'+esc(p.name)+'</button>';
+  });
+  h+='</div>';
+  openSheet(h);
+}
+
 function switchReader(){ closeSheet(); S.profile=''; localStorage.removeItem('ordo_profile'); picker(); }
 function syncNow(){
   closeSheet(); toast('Syncing…');
@@ -1344,7 +1557,7 @@ return {
   recurUi:recurUi, untilUi:untilUi, oRecurUi:oRecurUi,
   saveEng:saveEng, saveObl:saveObl, editEng:editEng, delEng:delEng, delObl:delObl,
   toggleObl:toggleObl, quickAdd:quickAdd, toggleGroup:toggleGroup,
-  setAtt:setAtt, switchReader:switchReader, syncNow:syncNow,
+  setAtt:setAtt, switchReader:switchReader, setLens:setLens, openLensPicker:openLensPicker, setBoardPerson:setBoardPerson, oTrackerUi:oTrackerUi, syncNow:syncNow,
   _scope:function(){}
 };
 })();

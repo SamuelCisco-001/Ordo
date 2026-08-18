@@ -1,4 +1,4 @@
-var CACHE = 'ordo-v8';
+var CACHE = 'ordo-v11';
 var SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', function (e) {
