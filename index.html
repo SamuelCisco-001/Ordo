@@ -193,6 +193,25 @@ nav.tabs button svg{width:22px; height:22px}
   transform:translateY(102%); transition:transform .22s ease; max-width:640px; margin:0 auto}
 #sheet.on{transform:none}
 #sheet .grab{width:38px; height:4px; background:var(--line); border-radius:99px; margin:2px auto 14px}
+
+/* On a tablet or desktop a bottom drawer reads as an afterthought.
+   Center it as a card instead. */
+@media(min-width:700px){
+  #sheet{
+    top:50%; left:50%; right:auto; bottom:auto;
+    width:min(620px, 92vw); max-height:82dvh;
+    border-radius:16px; padding:24px 26px 22px;
+    transform:translate(-50%,-46%) scale(.97); opacity:0; visibility:hidden;
+    box-shadow:0 18px 50px rgba(38,33,26,.24);
+    transition:opacity .18s ease, transform .18s ease, visibility 0s linear .18s;
+  }
+  #sheet.on{
+    transform:translate(-50%,-50%) scale(1); opacity:1; visibility:visible;
+    transition:opacity .18s ease, transform .18s ease, visibility 0s;
+  }
+  #sheet .grab{display:none}
+  #sheet .sh-title{font-size:23px}
+}
 .sh-title{font-family:var(--serif); font-size:21px; font-weight:500; margin:0 0 12px}
 .frm{display:flex; flex-direction:column; gap:12px}
 .lbl{font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); margin-bottom:4px; display:block}
@@ -289,6 +308,8 @@ nav.tabs button svg{width:22px; height:22px}
 <script>
 'use strict';
 var Ordo = (function(){
+
+var BUILD = '6 · attendees + centered sheet';
 
 // ------------------------------------------------------------ state
 var S = {
@@ -1068,43 +1089,31 @@ function confirmScope(verb, cb){
 function openDetail(id){
   var e=S.data.engagements.find(function(x){ return x.id===id; });
   if(!e) return;
+  var isFeed=(e.origin||'').indexOf('feed:')===0;
   var col=e.attendees.length?pcolor(e.attendees[0]):'#8B8272';
   var h='<h2 class="sh-title" style="border-left:3px solid '+col+'; padding-left:10px">'+esc(e.title)+'</h2>';
   h+='<div class="detail-line"><span class="k">When</span><span><span class="ordo-day">'+fmtDayLong(e.date)+'</span>'
     + (e.all_day ? ' · all day'+(e.end_date?' through '+fmtDayLong(e.end_date):'') : ' · '+fmtTime(e.start)+(e.end?'–'+fmtTime(e.end):''))+'</span></div>';
-  if(e.attendees.length){
-    h+='<div class="detail-line"><span class="k">Going</span><span class="people-line">';
-    e.attendees.forEach(function(s){ h+='<span class="ptag" style="background:'+pcolor(s)+'">'+esc(pname(s))+'</span>'; });
-    h+='</span></div>';
-  } else {
-    h+='<div class="detail-line"><span class="k">Going</span><span class="people-line" id="assignrow">';
-    S.data.people.forEach(function(p){
-      h+='<button type="button" class="pchip" onclick="Ordo.assignQuick(\''+e.id+'\',\''+p.slug+'\',this)">'+esc(p.name)+'</button>';
-    });
-    h+='</span></div>';
-  }
-  if(e.managers.length){
-    h+='<div class="detail-line"><span class="k">Managed by</span><span class="people-line">';
-    e.managers.forEach(function(s){ h+='<span class="ptag mgr" style="background:'+pcolor(s)+'">'+esc(pname(s))+'</span>'; });
-    h+='</span></div>';
-  }
+
+  h+='<div class="detail-line"><span class="k">Going</span><span class="people-line">'+peopleChips(e,'attendees')+'</span></div>';
+  h+='<div class="detail-line"><span class="k">Managed</span><span class="people-line">'+peopleChips(e,'managers')+'</span></div>';
+
   if(e.location) h+='<div class="detail-line"><span class="k">Where</span><span>'+esc(e.location)+'</span></div>';
   if(e.notes) h+='<div class="detail-line"><span class="k">Notes</span><span>'+esc(e.notes)+'</span></div>';
   if(e.recur_freq!=='none') h+='<div class="detail-line"><span class="k">Repeats</span><span>'
     + (e.recur_freq==='daily'?'Every day':'Weekly on '+e.recur_days.map(function(n){return DW[+n];}).join(', '))
     + (e.recur_until&&e.recur_until!=='never'?' until '+fmtDayLong(e.recur_until):'')+'</span></div>';
-  var isFeed=(e.origin||'').indexOf('feed:')===0;
+
   var feedTitle='';
-  if(isFeed){
-    (S.data.feeds||[]).forEach(function(f){ if(f.slug===e.origin.slice(5)) feedTitle=f.title; });
-  }
+  if(isFeed){ (S.data.feeds||[]).forEach(function(f){ if(f.slug===e.origin.slice(5)) feedTitle=f.title; }); }
   var srcbits=[];
   if(e.origin==='gcal') srcbits.push('Added in Google Calendar');
   if(isFeed) srcbits.push('From the '+esc(feedTitle||'subscribed')+' feed');
   if(e.sync) srcbits.push('On the family calendar');
   if(srcbits.length) h+='<div class="detail-line"><span class="k">Source</span><span style="color:var(--faint)">'+srcbits.join(' · ')+'</span></div>';
+
   if(isFeed){
-    h+='<div style="color:var(--faint); font-size:13px; margin-top:12px">This entry keeps itself in step with the feed. Change it at the source and the book follows within the hour.</div>'
+    h+='<div style="color:var(--faint); font-size:13px; margin-top:12px">Who is going is yours to set and it sticks. The title and time follow the feed.</div>'
       + '<div class="sh-actions" style="margin-top:14px"><button class="btn btn-ghost" onclick="Ordo.closeSheet()">Close</button></div>';
   } else {
     h+='<div class="sh-actions" style="margin-top:14px">'
@@ -1113,16 +1122,38 @@ function openDetail(id){
   }
   openSheet(h);
 }
-function assignQuick(id, slug, el){
-  el.classList.toggle('on');
-  el.style.background = el.classList.contains('on')?pcolor(slug):'';
-  clearTimeout(D._at);
-  D._assign = D._assign||{}; D._assign[id]=D._assign[id]||[];
-  var arr=D._assign[id]; var i=arr.indexOf(slug);
-  if(i===-1) arr.push(slug); else arr.splice(i,1);
-  D._at=setTimeout(function(){
-    apiPost('update_engagement',{id:id,scope:'one',fields:{attendees:arr}}).then(function(){ refresh(true); });
-  },900);
+
+function peopleChips(e, field){
+  var sel=e[field]||[];
+  return S.data.people.map(function(p){
+    var on=sel.indexOf(p.slug)!==-1;
+    var style=on ? 'background:'+p.color+'; color:#FBF6EC; border-color:transparent' : '';
+    return '<button type="button" class="pchip'+(on?' on':'')+'" style="'+style+'" '
+      + 'onclick="Ordo.setAtt(\''+e.id+'\',\''+field+'\',\''+p.slug+'\',this)">'+esc(p.name)+'</button>';
+  }).join('');
+}
+
+// Toggle a person on an engagement. Writes are debounced so tapping three
+// names in a row is one save, not three.
+var attTimers={};
+function setAtt(id, field, slug, el){
+  var e=S.data.engagements.find(function(x){ return x.id===id; });
+  if(!e) return;
+  var arr=e[field]||[];
+  var i=arr.indexOf(slug);
+  if(i===-1){ arr.push(slug); el.classList.add('on'); el.style.background=pcolor(slug); el.style.color='#FBF6EC'; el.style.borderColor='transparent'; }
+  else { arr.splice(i,1); el.classList.remove('on'); el.style.background=''; el.style.color=''; el.style.borderColor=''; }
+  e[field]=arr;
+  var key=id+':'+field;
+  clearTimeout(attTimers[key]);
+  attTimers[key]=setTimeout(function(){
+    var fields={};
+    fields[field]=e[field];
+    apiPost('update_engagement',{id:id, scope:'one', fields:fields}).then(function(res){
+      if(!res || res.ok===false){ toast('Could not save: '+((res&&res.error)||'no answer')); }
+      refresh(true);
+    }).catch(function(){ toast('Could not save. Are you offline?'); });
+  }, 700);
 }
 function editEng(id){
   var e=S.data.engagements.find(function(x){ return x.id===id; });
@@ -1224,7 +1255,8 @@ document.getElementById('avatarbtn').addEventListener('click', function(){
     + '<button onclick="Ordo.switchReader()">Switch reader<span class="sub">Now reading as '+(S.profile==='shared'?'the shared device':esc(pname(S.profile)))+'</span></button>'
     + '<button onclick="Ordo.syncNow()">Sync with Google Calendar<span class="sub">Also runs on its own every 15 minutes</span></button>'
     + '<button onclick="Ordo.resetGate()">Change address or PIN</button>'
-    + '</div>';
+    + '</div>'
+    + '<div style="text-align:center; color:var(--faint); font-size:11.5px; letter-spacing:.08em; padding:14px 0 2px">BUILD ' + BUILD + '</div>';
   openSheet(h);
 });
 function switchReader(){ closeSheet(); S.profile=''; localStorage.removeItem('ordo_profile'); picker(); }
@@ -1253,7 +1285,7 @@ return {
   recurUi:recurUi, untilUi:untilUi, oRecurUi:oRecurUi,
   saveEng:saveEng, saveObl:saveObl, editEng:editEng, delEng:delEng, delObl:delObl,
   toggleObl:toggleObl, quickAdd:quickAdd, toggleGroup:toggleGroup,
-  assignQuick:assignQuick, switchReader:switchReader, syncNow:syncNow,
+  setAtt:setAtt, switchReader:switchReader, syncNow:syncNow,
   _scope:function(){}
 };
 })();
