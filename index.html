@@ -139,6 +139,20 @@ nav.tabs button svg{width:22px; height:22px}
 .wcard .sub{font-size:12px; color:var(--faint)}
 .emptyday{color:var(--faint); font-family:var(--serif); font-style:italic; font-size:14px; padding:2px 0 6px}
 
+/* ---------- week grid ---------- */
+.wgrid .colhead{cursor:pointer}
+.colhead.today .ordo-day, .colhead.today .ordo-num{color:var(--rubric)}
+.col.todaycol{background:rgba(163,49,39,.028)}
+.adrail{border-bottom:1px solid var(--line)}
+.adcell{border-left:1px solid var(--line); border-bottom:1px solid var(--line);
+  padding:3px; display:flex; flex-direction:column; gap:3px; min-height:26px}
+.adchip{font-size:11px; border-radius:5px; padding:2px 5px; white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis}
+.wdots{display:flex; gap:2px; margin-top:2px}
+.wdot{width:14px; height:14px; border-radius:50%; color:#FBF6EC; font-size:8.5px;
+  line-height:14px; text-align:center; font-weight:700}
+.wdot.fam{background:var(--faint)}
+
 /* ---------- month ---------- */
 .mgrid{padding:0 8px 14px}
 .mhead{display:grid; grid-template-columns:repeat(7,1fr); padding:2px 0 6px}
@@ -244,6 +258,20 @@ nav.tabs button svg{width:22px; height:22px}
 .menu button:first-child{border-top:none}
 .menu .sub{display:block; font-size:12.5px; color:var(--faint); margin-top:1px}
 
+#newbtn{position:relative}
+#newdot{position:absolute; top:4px; right:3px; min-width:15px; height:15px; padding:0 3px;
+  border-radius:99px; background:var(--rubric); color:#FBF6EC; font-size:9.5px; line-height:15px;
+  text-align:center; font-weight:700; display:none}
+#newdot.on{display:block}
+.newrow{display:flex; gap:10px; align-items:baseline; padding:9px 0; border-top:1px solid var(--paper-2)}
+.newrow:first-of-type{border-top:none}
+.newrow .when{font-family:var(--serif); font-size:12.5px; color:var(--faint); min-width:74px}
+.newrow .what{flex:1; min-width:0}
+.newrow .t{font-weight:600}
+.newrow .sub{display:block; font-size:12px; color:var(--faint)}
+.newgroup{font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); margin:14px 0 2px}
+.newgroup:first-child{margin-top:0}
+
 #lensband{display:none; align-items:center; justify-content:space-between; gap:10px;
   padding:7px 14px; border-bottom:1px solid var(--line); position:sticky; top:49px; z-index:19}
 #lensband .ordo-day{font-size:14px}
@@ -289,6 +317,10 @@ nav.tabs button svg{width:22px; height:22px}
   <header class="bar">
     <span class="wordmark">Ordo</span>
     <span class="spacer"></span>
+    <button class="iconbtn" id="newbtn" title="What's new" aria-label="What's new" onclick="Ordo.openNew()">
+      <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M18 6l-2.5 2.5M8.5 15.5L6 18"/><circle cx="12" cy="12" r="3.2"/></svg>
+      <span id="newdot"></span>
+    </button>
     <button class="iconbtn" id="syncbtn" title="Sync now" aria-label="Sync now">
       <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 11a8 8 0 0 0-14.9-3M4 13a8 8 0 0 0 14.9 3"/><path d="M20 4v4h-4M4 20v-4h4"/></svg>
     </button>
@@ -317,7 +349,7 @@ nav.tabs button svg{width:22px; height:22px}
 'use strict';
 var Ordo = (function(){
 
-var BUILD = '11 · assigning is optional';
+var BUILD = '14 · week grid, steady checkboxes';
 
 // ------------------------------------------------------------ state
 var S = {
@@ -332,6 +364,7 @@ var S = {
   weekStart: null,
   monthPerson: '',
   lens: localStorage.getItem('ordo_lens') || '',
+  seen: localStorage.getItem('ordo_seen') || '',
   boardPerson: '',
   showDone: {},
   lastFetch: 0
@@ -387,11 +420,7 @@ function refresh(force){
   return apiGet({ p:S.pin, action:'bootstrap', profile:S.profile || 'shared' })
     .then(function(res){
       if(!res.ok){ if(res.error==='bad_pin'){ resetGate(); } throw new Error(res.error); }
-      S.data = res;
-      S.lastFetch = Date.now();
-      localStorage.setItem('ordo_cache', JSON.stringify(res));
-      offline(false);
-      render();
+      mergeBook(res);
     })
     .catch(function(){
       offline(true);
@@ -404,12 +433,7 @@ function offline(on){ document.getElementById('offline').classList.toggle('on', 
 // the server a second time.
 function applyBook(res){
   if(!res || !res.book) return false;
-  S.data = res.book;
-  S.lastFetch = Date.now();
-  try { localStorage.setItem('ordo_cache', JSON.stringify(res.book)); } catch(e){}
-  offline(false);
-  render();
-  return true;
+  return mergeBook(res.book);
 }
 function toast(msg){
   var t = document.getElementById('toast');
@@ -510,10 +534,15 @@ function setLens(slug){
 
 function enter(){
   show('screen-app');
+  if(!S.seen){
+    S.seen = new Date().toISOString();
+    localStorage.setItem('ordo_seen', S.seen);
+  }
   var av = document.getElementById('avatarbtn');
   if(S.profile==='shared'){ av.style.background='var(--paper-2)'; av.style.color='var(--faint)'; av.textContent='⌂'; }
   else { av.style.background=pcolor(S.profile); av.textContent=initial(S.profile); }
-  if(!S.weekPerson) S.weekPerson = S.profile!=='shared' ? S.profile : (S.data && S.data.people[0] ? S.data.people[0].slug : '');
+  // Week opens on everyone, like the day view. A chip narrows it.
+  if(S.lens) S.weekPerson = S.lens;
   if(!S.weekStart) S.weekStart = weekStartOf(todayStr());
   render();
   refresh(true);
@@ -534,6 +563,7 @@ function render(){
   document.getElementById('tab-book').classList.toggle('on', S.tab==='book');
   document.getElementById('tab-boards').classList.toggle('on', S.tab==='boards');
   if(S.tab==='book') renderBook(); else renderBoards();
+  paintNewBadge();
 }
 
 // An event pointing at a person who isn't in the People tab would otherwise
@@ -737,45 +767,104 @@ function shiftWeek(n){ S.weekStart=addDays(S.weekStart,7*n); render(); }
 function thisWeek(){ S.weekStart=weekStartOf(todayStr()); render(); }
 
 function weekBody(){
+  var ds=S.data.config.day_start, de=S.data.config.day_end;
+  var hours=de-ds;
+  var t=todayStr();
+  var who=S.lens || S.weekPerson;
+
   var h='';
   if(!S.lens){
-    h+='<div class="chips">';
+    h+='<div class="chips">'
+      + '<button class="chip'+(S.weekPerson===''?' on':'')+'" style="'+(S.weekPerson===''?'background:var(--ink)':'')+'" onclick="Ordo.setWeekPerson(\'\')">Everyone</button>';
     S.data.people.forEach(function(p){
       var on=p.slug===S.weekPerson;
       h+='<button class="chip'+(on?' on':'')+'" style="'+(on?'background:'+p.color:'')+'" onclick="Ordo.setWeekPerson(\''+p.slug+'\')">'+esc(p.name)+'</button>';
     });
     h+='</div>';
   }
-  var t=todayStr();
-  for(var i=0;i<7;i++){
-    var d=addDays(S.weekStart,i);
-    var evs=engsOn(d).filter(function(e){ return attendsCol(e,S.weekPerson)!==''; })
-      .sort(function(a,b){ return (a.all_day?-1:mins(a.start)) - (b.all_day?-1:mins(b.start)); });
-    var red = d===t ? ' red' : '';
-    h+='<div class="wday"><div class="dh"><span class="ordo-day'+red+'">'+DW[weekday(d)]+'</span>'
-      + '<span class="ordo-num'+red+'">'+dfrom(d).getDate()+'</span>'
-      + (d===t?'<span class="ordo-day red" style="font-size:12px">today</span>':'')+'</div>';
-    if(!evs.length){ h+='<div class="emptyday">an open day</div>'; }
-    else {
-      h+='<div class="wlist">';
-      evs.forEach(function(e){
+
+  var days=[];
+  for(var i=0;i<7;i++) days.push(addDays(S.weekStart,i));
+
+  function mine(day){
+    return engsOn(day).filter(function(e){
+      if(!who) return true;
+      return attendsCol(e,who)!=='' || e.attendees.length===0;
+    });
+  }
+
+  // all-day band, one cell per day, only drawn if the week has any
+  var anyAllDay=days.some(function(d){ return mine(d).some(function(e){ return e.all_day; }); });
+
+  h+='<div class="gridwrap"><div class="grid wgrid" style="grid-template-columns:var(--rail) repeat(7,minmax(132px,1fr))">';
+  h+='<div class="railhead"></div>';
+  days.forEach(function(d){
+    var isT=d===t;
+    h+='<div class="colhead'+(isT?' today':'')+'" onclick="Ordo.openDay(\''+d+'\')">'
+      + '<span class="ordo-day" style="display:block; font-size:11px">'+DW[weekday(d)]+'</span>'
+      + '<span class="ordo-num" style="font-size:18px">'+dfrom(d).getDate()+'</span></div>';
+  });
+
+  if(anyAllDay){
+    h+='<div class="adrail"></div>';
+    days.forEach(function(d){
+      h+='<div class="adcell">';
+      mine(d).filter(function(e){ return e.all_day; }).forEach(function(e){
         var col=e.attendees.length?pcolor(e.attendees[0]):'#8B8272';
-        var role=attendsCol(e,S.weekPerson);
-        var mgrB=(e.managers.length&&e.managers[0]!==S.weekPerson)?'border:2px solid '+pcolor(e.managers[0])+';':'';
-        var style='background:'+tint(col,e.type==='rhythm'?.1:.16)+'; border-left:3px solid '+col+';'
-          + (e.type==='block'?'border:1.5px dashed '+col+'; background:transparent;':mgrB)
-          + (role==='mgr'?'opacity:.5;':'');
-        h+='<div class="wcard" style="'+style+'" onclick="Ordo.openDetail(\''+e.id+'\')">'
-          + '<span class="tm">'+(e.all_day?'all day':fmtTime(e.start))+'</span>'
-          + '<span><span class="t">'+esc(e.title)+'</span>'
-          + (e.location?'<span class="sub"> · '+esc(e.location)+'</span>':'')+'</span></div>';
+        h+='<div class="adchip" style="background:'+tint(col,.16)+'; border-left:2.5px solid '+col+'" onclick="Ordo.openDetail(\''+e.id+'\')">'
+          + esc(e.title)+'</div>';
       });
       h+='</div>';
-    }
-    h+='</div>';
+    });
   }
+
+  h+='<div class="railcell" style="height:'+(hours*52)+'px">';
+  for(var k=1;k<hours;k++){
+    var hr=ds+k, ap=hr>=12?'p':'a', hh=hr%12||12;
+    h+='<span class="hourlbl" style="top:'+(k*52)+'px">'+hh+ap+'</span>';
+  }
+  h+='</div>';
+
+  days.forEach(function(d){
+    h+='<div class="col'+(d===t?' todaycol':'')+'" style="height:'+(hours*52)+'px">';
+    for(var k2=1;k2<hours;k2++) h+='<div class="hline" style="top:'+(k2*52)+'px"></div>';
+    var timed=mine(d).filter(function(e){ return !e.all_day; })
+      .sort(function(a,b){ return mins(a.start)-mins(b.start); });
+    var lanes=layoutLanes(timed);
+    timed.forEach(function(e,idx){
+      var top=(mins(e.start)-ds*60)/60*52;
+      var hgt=Math.max(24, (Math.max(20, mins(e.end||e.start)-mins(e.start)))/60*52 - 2);
+      var lane=lanes[idx], n=lanes.n[idx];
+      var col=e.attendees.length?pcolor(e.attendees[0]):'#8B8272';
+      var mgrB=(e.managers.length && e.attendees.indexOf(e.managers[0])===-1)
+        ? 'border:2px solid '+pcolor(e.managers[0])+';' : '';
+      var cls='evt'+(e.type==='block'?' blk':'')+(e._pending?' pending':'');
+      var style='top:'+top+'px; height:'+hgt+'px; left:calc('+(lane/n*100)+'% + 2px); width:calc('+(100/n)+'% - 4px);'
+        + 'background:'+tint(col, e.type==='rhythm'?.1:.16)+'; border-left:3px solid '+col+';'
+        + (e.type==='block' ? 'border:1.5px dashed '+col+'; background:transparent;' : mgrB);
+      var dots='';
+      e.attendees.slice(0,4).forEach(function(sl){
+        dots+='<span class="wdot" style="background:'+pcolor(sl)+'">'+initial(sl)+'</span>';
+      });
+      h+='<div class="'+cls+'" style="'+style+'" onclick="Ordo.openDetail(\''+e.id+'\')">'
+        + '<span class="t">'+esc(e.title)+'</span>'
+        + (dots?'<span class="wdots">'+dots+'</span>':'<span class="wdots"><span class="wdot fam">F</span></span>')
+        + '</div>';
+    });
+    if(d===t) h+=nowLineHtml(ds,de);
+    h+='</div>';
+  });
+
+  h+='</div></div>';
   return h;
 }
+
+function nowLineHtml(ds,de){
+  var now=new Date(), m=now.getHours()*60+now.getMinutes();
+  if(m<ds*60||m>de*60) return '';
+  return '<div class="nowline" style="top:'+((m-ds*60)/60*52)+'px"></div>';
+}
+
 function setWeekPerson(s){ S.weekPerson=s; render(); }
 
 // ------------------------------------------------------------ month
@@ -923,6 +1012,110 @@ function renderBoards(){
   h+='</div>';
   document.getElementById('main').innerHTML=h;
 }
+// What's arrived since this device last looked. A series counts once, not
+// sixty times, and a daily chore turning up daily isn't news.
+function newItems(){
+  if(!S.data || !S.seen) return [];
+  var since = Date.parse(S.seen) || 0;
+  var out = [], series = {};
+
+  S.data.engagements.forEach(function(e){
+    var t = Date.parse(e.updated_at||'') || 0;
+    if(t <= since) return;
+    if(e.series_id){
+      var g = series[e.series_id];
+      if(g){ g.count++; if(e.date < g.date) g.date = e.date; return; }
+      series[e.series_id] = { kind:'eng', item:e, count:1, date:e.date, t:t };
+      out.push(series[e.series_id]);
+      return;
+    }
+    out.push({ kind:'eng', item:e, count:1, date:e.date, t:t });
+  });
+
+  S.data.obligations.forEach(function(o){
+    var t = Date.parse(o.updated_at||'') || 0;
+    if(t <= since) return;
+    if(o.repeat_freq==='rhythm_daily' || o.repeat_freq==='rhythm_weekly') return;
+    if(o.status==='done') return;
+    out.push({ kind:'obl', item:o, count:1, date:o.deadline||'', t:t });
+  });
+
+  out.sort(function(a,b){ return b.t - a.t; });
+  return out;
+}
+
+function paintNewBadge(){
+  var n = newItems().length;
+  var dot = document.getElementById('newdot');
+  if(!dot) return;
+  dot.textContent = n > 9 ? '9+' : String(n);
+  dot.classList.toggle('on', n > 0);
+}
+
+function openNew(){
+  var items = newItems();
+  var h = '<h2 class="sh-title">Newly written in</h2>';
+  if(!items.length){
+    h += '<div class="emptyday" style="padding:6px 0 16px">Nothing new since you last looked.</div>';
+  } else {
+    var evs = items.filter(function(x){ return x.kind==='eng'; });
+    var obs = items.filter(function(x){ return x.kind==='obl'; });
+    if(evs.length){
+      h += '<div class="newgroup">On the calendar</div>';
+      evs.slice(0,30).forEach(function(x){
+        var e = x.item;
+        var who = e.attendees.length ? e.attendees.map(pname).join(', ') : 'Family';
+        var src = (e.origin||'').indexOf('feed:')===0 ? feedName(e.origin.slice(5))
+          : (e.origin==='gcal' ? 'Google Calendar' : '');
+        h += '<div class="newrow" onclick="Ordo.jumpTo(\''+e.id+'\')">'
+          + '<span class="when ordo-day">'+esc(fmtDeadline(x.date)||x.date)+'</span>'
+          + '<span class="what"><span class="t">'+esc(e.title)+'</span>'
+          + '<span class="sub">'+esc(who)
+          + (x.count>1 ? ' · '+x.count+' days' : '')
+          + (src ? ' · '+esc(src) : '')+'</span></span></div>';
+      });
+    }
+    if(obs.length){
+      h += '<div class="newgroup">On the boards</div>';
+      obs.slice(0,30).forEach(function(x){
+        var o = x.item;
+        var who = o.assignees.length ? o.assignees.map(pname).join(', ') : 'Anyone';
+        var tr = (S.data.trackers.find(function(t){ return t.slug===o.tracker; })||{}).title || o.tracker;
+        h += '<div class="newrow" onclick="Ordo.jumpToBoard()">'
+          + '<span class="when ordo-day">'+esc(o.deadline?fmtDeadline(o.deadline):'no date')+'</span>'
+          + '<span class="what"><span class="t">'+esc(o.title)+'</span>'
+          + '<span class="sub">'+esc(tr)+' · '+esc(who)+'</span></span></div>';
+      });
+    }
+  }
+  h += '<div class="sh-actions" style="margin-top:16px">'
+    + '<button class="btn btn-ghost" onclick="Ordo.closeSheet()">Close</button>'
+    + (items.length ? '<button class="btn btn-ink" onclick="Ordo.markSeen()">Mark as read</button>' : '')
+    + '</div>';
+  openSheet(h);
+}
+
+function feedName(slug){
+  var f = (S.data.feeds||[]).find(function(x){ return x.slug===slug; });
+  return f ? f.title : 'a subscribed feed';
+}
+
+function markSeen(){
+  S.seen = new Date().toISOString();
+  localStorage.setItem('ordo_seen', S.seen);
+  closeSheet();
+  paintNewBadge();
+}
+
+function jumpTo(id){
+  var e = S.data.engagements.find(function(x){ return x.id===id; });
+  if(!e) return;
+  S.anchor = e.date; S.tab='book'; S.view='day';
+  closeSheet(); render();
+  setTimeout(function(){ openDetail(id); }, 120);
+}
+function jumpToBoard(){ S.tab='boards'; closeSheet(); render(); }
+
 function trackerType(slug){
   var t=(S.data.trackers||[]).find(function(x){ return x.slug===slug; });
   return t?t.type:'todo';
@@ -951,15 +1144,31 @@ function itemRow(o,t,dim){
 }
 function toggleObl(id){
   var o=S.data.obligations.find(function(x){ return x.id===id; });
-  if(o){ o.status = o.status==='open'?'done':'open'; render(); }
-  apiPost('toggle_obligation',{id:id}).then(function(res){
-    if(!res || res.ok===false){
-      toast('Could not save: ' + ((res && res.error) || 'no answer'));
-      refresh(true); return;
-    }
-    if(res.respawned) toast('Done. The next one is on the board.');
-    if(!applyBook(res)) refresh(true);
-  }).catch(function(){ toast('Could not save. Are you offline?'); refresh(true); });
+  if(!o) return;
+  if(String(id).indexOf('tmp-')===0){ toast('Still saving that one.'); return; }
+  var want = o.status==='open' ? 'done' : 'open';
+  o.status = want;
+  pendingToggles[id] = want;
+  render();
+
+  enqueue(function(){
+    return apiPost('toggle_obligation',{id:id}).then(function(res){
+      if(!res || res.ok===false){
+        delete pendingToggles[id];
+        var back=S.data.obligations.find(function(x){ return x.id===id; });
+        if(back) back.status = want==='done'?'open':'done';
+        toast('Could not save: ' + ((res && res.error) || 'no answer'));
+        render(); return;
+      }
+      delete pendingToggles[id];
+      if(res.respawned) toast('Done. The next one is on the board.');
+      if(!applyBook(res)) render();
+    }).catch(function(){
+      delete pendingToggles[id];
+      toast('Could not save. Are you offline?');
+      render();
+    });
+  });
 }
 var quickBusy={};
 function quickAdd(tracker){
@@ -973,15 +1182,20 @@ function quickAdd(tracker){
     deadline_time:'', start_date:'', urgent:false, status:'open', completed_at:'',
     repeat_freq:'none', repeat_every:'', repeat_days:[], notes:'',
     sort_order:Date.now(), _pending:true };
+  temp._kind='obl'; inflightTemps.push(temp);
   S.data.obligations.push(temp);
   render();
-  apiPost('create_obligation',{draft:{tracker:tracker,title:v}})
+  enqueue(function(){ return apiPost('create_obligation',{draft:{tracker:tracker,title:v}})
     .then(function(res){
       quickBusy[tracker]=false;
-      if(!res || res.ok===false){ toast('Could not save: ' + ((res && res.error) || 'no answer')); inp.value=v; return; }
+      clearTemp(temp);
+      if(!res || res.ok===false){
+        var k=S.data.obligations.indexOf(temp); if(k!==-1) S.data.obligations.splice(k,1);
+        toast('Could not save: ' + ((res && res.error) || 'no answer')); inp.value=v; render(); return;
+      }
       if(!applyBook(res)) refresh(true);
     })
-    .catch(function(){ quickBusy[tracker]=false; toast('Could not save. Are you offline?'); inp.value=v; });
+    .catch(function(){ quickBusy[tracker]=false; clearTemp(temp); toast('Could not save. Are you offline?'); inp.value=v; }); });
 }
 
 // ------------------------------------------------------------ sheet plumbing
@@ -1140,6 +1354,39 @@ function readEngForm(){
   };
   return f;
 }
+// Writes go out one at a time. Three quick checkbox taps used to fire three
+// overlapping requests, each answering with a snapshot of the book from a
+// different moment, so finished items came back to life.
+var writeQueue = Promise.resolve();
+function enqueue(fn){
+  writeQueue = writeQueue.then(fn, fn);
+  return writeQueue;
+}
+
+// Local changes the server hasn't confirmed yet. Any book that arrives gets
+// these laid back over the top of it, so an in-flight tap is never undone by
+// an answer to an earlier one.
+var pendingToggles = {};
+var inflightTemps = [];
+
+function mergeBook(book){
+  if(!book) return false;
+  S.data = book;
+  S.lastFetch = Date.now();
+  Object.keys(pendingToggles).forEach(function(id){
+    var o = S.data.obligations.find(function(x){ return x.id===id; });
+    if(o) o.status = pendingToggles[id];
+  });
+  inflightTemps.forEach(function(t){
+    var list = t._kind==='eng' ? S.data.engagements : S.data.obligations;
+    if(list.indexOf(t)===-1) list.push(t);
+  });
+  try { localStorage.setItem('ordo_cache', JSON.stringify(S.data)); } catch(e){}
+  offline(false);
+  render();
+  return true;
+}
+
 // A write is in flight. Locks the sheet's action buttons so a second tap
 // can't start a second write, which is how one event became three.
 var saving=false;
@@ -1220,6 +1467,7 @@ function saveEng(){
       attendees:f.attendees.slice(), managers:f.managers.slice(),
       location:f.location, notes:f.notes, recur_freq:'none', recur_days:[],
       recur_until:'', series_id:'', sync:f.sync, origin:'ordo', _pending:true };
+    temp._kind='eng'; inflightTemps.push(temp);
     S.data.engagements.push(temp);
     closeSheet(); toast('Written into the book.'); render();
   } else {
@@ -1235,6 +1483,7 @@ function saveEng(){
       render(); return;
     }
     if(!temp){ closeSheet(); toast('Written into the book.'); }
+    if(temp) clearTemp(temp);
     if(!applyBook(res)){ if(temp) dropTemp(temp); refresh(true); }
   }).catch(function(){
     saving=false;
@@ -1258,6 +1507,12 @@ function saveEng(){
 function dropTemp(temp){
   var i=S.data.engagements.indexOf(temp);
   if(i!==-1) S.data.engagements.splice(i,1);
+  var j=inflightTemps.indexOf(temp);
+  if(j!==-1) inflightTemps.splice(j,1);
+}
+function clearTemp(temp){
+  var j=inflightTemps.indexOf(temp);
+  if(j!==-1) inflightTemps.splice(j,1);
 }
 function confirmScope(verb, cb){
   openSheet('<h2 class="sh-title">'+verb+'…</h2><div class="menu">'
@@ -1485,10 +1740,11 @@ function saveObl(){
   p.then(function(res){
     saving=false;
     if(!res || res.ok===false){
-      if(temp){ var i=S.data.obligations.indexOf(temp); if(i!==-1) S.data.obligations.splice(i,1); }
+      if(temp){ clearTemp(temp); var i=S.data.obligations.indexOf(temp); if(i!==-1) S.data.obligations.splice(i,1); }
       toast('Could not save: '+((res&&res.error)||'no answer'));
       render(); return;
     }
+    if(temp) clearTemp(temp);
     if(!applyBook(res)) refresh(true);
   }).catch(function(){
     saving=false;
@@ -1557,7 +1813,7 @@ return {
   recurUi:recurUi, untilUi:untilUi, oRecurUi:oRecurUi,
   saveEng:saveEng, saveObl:saveObl, editEng:editEng, delEng:delEng, delObl:delObl,
   toggleObl:toggleObl, quickAdd:quickAdd, toggleGroup:toggleGroup,
-  setAtt:setAtt, switchReader:switchReader, setLens:setLens, openLensPicker:openLensPicker, setBoardPerson:setBoardPerson, oTrackerUi:oTrackerUi, syncNow:syncNow,
+  setAtt:setAtt, switchReader:switchReader, setLens:setLens, openLensPicker:openLensPicker, setBoardPerson:setBoardPerson, oTrackerUi:oTrackerUi, openNew:openNew, markSeen:markSeen, jumpTo:jumpTo, jumpToBoard:jumpToBoard, syncNow:syncNow,
   _scope:function(){}
 };
 })();
