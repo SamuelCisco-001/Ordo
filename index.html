@@ -349,7 +349,7 @@ nav.tabs button svg{width:22px; height:22px}
 'use strict';
 var Ordo = (function(){
 
-var BUILD = '14 · week grid, steady checkboxes';
+var BUILD = '15 · week grid, steady checkboxes';
 
 // ------------------------------------------------------------ state
 var S = {
@@ -462,7 +462,19 @@ function show(id){
 }
 
 function boot(){
-  if('serviceWorker' in navigator){ navigator.serviceWorker.register('sw.js').catch(function(){}); }
+  if('serviceWorker' in navigator){
+    navigator.serviceWorker.register('sw.js').then(function(reg){
+      reg.update();
+      // When a new worker takes control, reload once so the page it serves
+      // is the one that just arrived.
+      var reloaded=false;
+      navigator.serviceWorker.addEventListener('controllerchange', function(){
+        if(reloaded) return;
+        reloaded=true;
+        location.reload();
+      });
+    }).catch(function(){});
+  }
   if(!S.url || !S.pin){ gate(); return; }
   if(!S.profile){ picker(); return; }
   enter();
