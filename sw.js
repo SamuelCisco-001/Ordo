@@ -1,53 +1,21 @@
-var CACHE = 'ordo-v14';
-var SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
-
-self.addEventListener('install', function (e) {
-  e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(SHELL); })
-    .then(function () { return self.skipWaiting(); }));
-});
+// Self-destructing worker.
+//
+// Earlier versions of this file cached the app shell, and one of them cached
+// itself, which left devices serving a stale worker that could never be
+// replaced. This version exists only to undo that: it clears every cache,
+// unregisters itself, and reloads the pages it controls. Once it has run, the
+// app has no service worker at all and always loads from the network.
+self.addEventListener('install', function (e) { self.skipWaiting(); });
 
 self.addEventListener('activate', function (e) {
-  e.waitUntil(caches.keys().then(function (keys) {
-    return Promise.all(keys.filter(function (k) { return k !== CACHE; })
-      .map(function (k) { return caches.delete(k); }));
-  }).then(function () { return self.clients.claim(); }));
-});
-
-self.addEventListener('fetch', function (e) {
-  var url = new URL(e.request.url);
-  if (url.origin !== self.location.origin || e.request.method !== 'GET') return;
-
-  var isPage = e.request.mode === 'navigate' || url.pathname.endsWith('.html') ||
-    url.pathname === '/' || url.pathname.endsWith('/');
-
-  if (isPage) {
-    // Network first: the newest build always wins, cache only covers offline.
-    e.respondWith(
-      fetch(e.request, { cache: 'no-store' }).then(function (res) {
-        if (res && res.ok) {
-          var copy = res.clone();
-          caches.open(CACHE).then(function (c) { c.put(e.request, copy); });
-        }
-        return res;
-      }).catch(function () {
-        return caches.match(e.request).then(function (hit) {
-          return hit || caches.match('index.html');
-        });
-      })
-    );
-    return;
-  }
-
-  // Icons and manifest: cache first is fine, they rarely change.
-  e.respondWith(
-    caches.match(e.request).then(function (hit) {
-      return hit || fetch(e.request).then(function (res) {
-        if (res && res.ok) {
-          var copy = res.clone();
-          caches.open(CACHE).then(function (c) { c.put(e.request, copy); });
-        }
-        return res;
-      });
-    })
+  e.waitUntil(
+    caches.keys()
+      .then(function (keys) { return Promise.all(keys.map(function (k) { return caches.delete(k); })); })
+      .then(function () { return self.registration.unregister(); })
+      .then(function () { return self.clients.matchAll({ type: 'window' }); })
+      .then(function (clients) { clients.forEach(function (c) { c.navigate(c.url); }); })
   );
 });
+
+// Never intercept anything while we wait to be removed.
+self.addEventListener('fetch', function (e) { });

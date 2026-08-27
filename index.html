@@ -349,7 +349,7 @@ nav.tabs button svg{width:22px; height:22px}
 'use strict';
 var Ordo = (function(){
 
-var BUILD = '15 · week grid, steady checkboxes';
+var BUILD = '16 · no more stale builds';
 
 // ------------------------------------------------------------ state
 var S = {
@@ -462,22 +462,53 @@ function show(id){
 }
 
 function boot(){
-  if('serviceWorker' in navigator){
-    navigator.serviceWorker.register('sw.js').then(function(reg){
-      reg.update();
-      // When a new worker takes control, reload once so the page it serves
-      // is the one that just arrived.
-      var reloaded=false;
-      navigator.serviceWorker.addEventListener('controllerchange', function(){
-        if(reloaded) return;
-        reloaded=true;
-        location.reload();
-      });
-    }).catch(function(){});
-  }
+  scrubServiceWorkers();
   if(!S.url || !S.pin){ gate(); return; }
   if(!S.profile){ picker(); return; }
   enter();
+}
+
+// The app runs straight off the network now. Any service worker left over
+// from an older build gets torn out here, along with its caches, so a stale
+// copy can never wedge itself in front of a new one again.
+function scrubServiceWorkers(){
+  if(!('serviceWorker' in navigator)) return;
+  try {
+    navigator.serviceWorker.getRegistrations().then(function(regs){
+      regs.forEach(function(r){ r.unregister(); });
+    }).catch(function(){});
+  } catch(e){}
+  try {
+    if(window.caches && caches.keys){
+      caches.keys().then(function(keys){
+        keys.forEach(function(k){ caches.delete(k); });
+      }).catch(function(){});
+    }
+  } catch(e2){}
+}
+
+// Belt and braces for the person holding the phone: throw away every cache,
+// remove any worker, and come back on a fresh address the browser has never
+// seen, which no cache can answer.
+function forceRefresh(){
+  toast('Fetching the newest version…');
+  var done = function(){
+    var base = location.href.split('#')[0].split('?')[0];
+    location.replace(base + '?v=' + Date.now());
+  };
+  var jobs = [];
+  if('serviceWorker' in navigator){
+    jobs.push(navigator.serviceWorker.getRegistrations()
+      .then(function(regs){ return Promise.all(regs.map(function(r){ return r.unregister(); })); })
+      .catch(function(){}));
+  }
+  if(window.caches && caches.keys){
+    jobs.push(caches.keys()
+      .then(function(keys){ return Promise.all(keys.map(function(k){ return caches.delete(k); })); })
+      .catch(function(){}));
+  }
+  Promise.all(jobs).then(done).catch(done);
+  setTimeout(done, 2500);
 }
 
 function gate(msg){
@@ -1781,6 +1812,7 @@ document.getElementById('avatarbtn').addEventListener('click', function(){
     + '<button onclick="Ordo.switchReader()">Switch reader<span class="sub">Now reading as '+(S.profile==='shared'?'the shared device':esc(pname(S.profile)))+'</span></button>'
     + '<button onclick="Ordo.openLensPicker()">Whose book<span class="sub">'+(S.lens?'Showing only '+esc(pname(S.lens)):'Showing everyone')+'</span></button>'
     + '<button onclick="Ordo.syncNow()">Sync with Google Calendar<span class="sub">Also runs on its own every 15 minutes</span></button>'
+    + '<button onclick="Ordo.forceRefresh()">Get the newest version<span class="sub">Clears this device and reloads from the web</span></button>'
     + '<button onclick="Ordo.resetGate()">Change address or PIN</button>'
     + '</div>'
     + '<div style="text-align:center; color:var(--faint); font-size:11.5px; letter-spacing:.08em; padding:14px 0 2px">BUILD ' + BUILD + '</div>';
@@ -1808,6 +1840,25 @@ function syncNow(){
 }
 document.getElementById('syncbtn').addEventListener('click', syncNow);
 
+// Hold the sync button for a second to pull down a new build.
+(function(){
+  var btn=document.getElementById('syncbtn'), timer=null, held=false;
+  function start(){
+    held=false;
+    timer=setTimeout(function(){ held=true; forceRefresh(); }, 900);
+  }
+  function stop(ev){
+    clearTimeout(timer);
+    if(held && ev){ ev.preventDefault(); ev.stopPropagation(); }
+  }
+  btn.addEventListener('touchstart', start, {passive:true});
+  btn.addEventListener('touchend', stop);
+  btn.addEventListener('touchcancel', stop);
+  btn.addEventListener('mousedown', start);
+  btn.addEventListener('mouseup', stop);
+  btn.addEventListener('mouseleave', stop);
+})();
+
 document.addEventListener('visibilitychange', function(){
   if(!document.hidden && S.profile) refresh();
 });
@@ -1825,7 +1876,7 @@ return {
   recurUi:recurUi, untilUi:untilUi, oRecurUi:oRecurUi,
   saveEng:saveEng, saveObl:saveObl, editEng:editEng, delEng:delEng, delObl:delObl,
   toggleObl:toggleObl, quickAdd:quickAdd, toggleGroup:toggleGroup,
-  setAtt:setAtt, switchReader:switchReader, setLens:setLens, openLensPicker:openLensPicker, setBoardPerson:setBoardPerson, oTrackerUi:oTrackerUi, openNew:openNew, markSeen:markSeen, jumpTo:jumpTo, jumpToBoard:jumpToBoard, syncNow:syncNow,
+  setAtt:setAtt, switchReader:switchReader, forceRefresh:forceRefresh, setLens:setLens, openLensPicker:openLensPicker, setBoardPerson:setBoardPerson, oTrackerUi:oTrackerUi, openNew:openNew, markSeen:markSeen, jumpTo:jumpTo, jumpToBoard:jumpToBoard, syncNow:syncNow,
   _scope:function(){}
 };
 })();
